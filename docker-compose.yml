@@ -1,0 +1,93 @@
+# Docker Compose for SIP AI Assistant
+# ====================================
+# For GB10/Grace Blackwell with 100GB+ VRAM
+
+
+services:
+  # vLLM Server - Serves the LLM
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: sip-ai-vllm
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    env_file:
+      - .env
+    command: >
+      --model ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
+      --port 8000
+      --tensor-parallel-size 1
+      --gpu-memory-utilization 0.80
+      --max-model-len 8192
+      --trust-remote-code
+    ports:
+      - "8000:8000"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # SIP AI Assistant
+  sip-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sip-ai-assistant
+    network_mode: "host"
+    runtime: nvidia
+    depends_on:
+      vllm:
+        condition: service_healthy
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - LLM_BACKEND=vllm
+      - LLM_BASE_URL=http://localhost:8000/v1
+      - LLM_MODEL=${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      - WHISPER_DEVICE=cuda
+      - PIPER_MODEL=${PIPER_MODEL:-en_US-amy-medium}
+      - PIPER_MODEL_PATH=/opt/piper/models
+      - SIP_USER=${SIP_USER:-ai-assistant}
+      - SIP_PASSWORD=${SIP_PASSWORD:-}
+      - SIP_DOMAIN=${SIP_DOMAIN:-localhost}
+      - SIP_PORT=${SIP_PORT:-5060}
+      - SIP_REGISTRAR=${SIP_REGISTRAR:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "10000-10100:10000-10100/udp"  # RTP ports
+    volumes:
+      - ./data:/app/data
+      - whisper-cache:/root/.cache/huggingface
+      - piper-models:/opt/piper/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  huggingface-cache:
+  whisper-cache:
+  piper-models:
+
+networks:
+  default:
+    driver: bridge
