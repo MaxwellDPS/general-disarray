@@ -23,6 +23,7 @@ try:
 except ImportError:
     VAD_AVAILABLE = False
 
+
 try:
     from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
@@ -94,10 +95,6 @@ class VoiceActivityDetector:
     def process_audio(self, audio_chunk: bytes) -> Tuple[bool, bool]:
         """
         Process audio and return (has_speech, end_of_utterance).
-        
-        Returns:
-            has_speech: True if speech detected in this chunk
-            end_of_utterance: True if we've detected end of speech
         """
         is_speech = self.is_speech(audio_chunk)
         
@@ -769,16 +766,26 @@ class AudioPipeline:
         
         Returns transcription when end of utterance detected, None otherwise.
         """
-        is_speech, end_of_utterance = self.vad.process_audio(audio_chunk)
+        is_speech, end_of_utterance =  self.vad.process_audio(audio_chunk)
         
         if is_speech:
             self.audio_buffer.extend(audio_chunk)
             
             # Prevent buffer overflow
+            # Fix: Force Transcribe on Overflow
             if len(self.audio_buffer) > self.max_buffer_size:
-                logger.warning("Audio buffer overflow, truncating")
-                self.audio_buffer = self.audio_buffer[-self.max_buffer_size:]
+                logger.warning("Max speech duration reached. Forcing transcription.")
                 
+                # Snapshot the data
+                audio_data = bytes(self.audio_buffer)
+                
+                # Reset buffers for next turn
+                self.audio_buffer.clear()
+                self.vad.reset() 
+                
+                # RETURN result immediately (This stops the overflow loop)
+                return await self.stt.transcribe(audio_data)
+
         if end_of_utterance and len(self.audio_buffer) > 0:
             # Transcribe accumulated audio
             audio_data = bytes(self.audio_buffer)

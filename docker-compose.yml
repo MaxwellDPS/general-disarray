@@ -6,7 +6,7 @@
 services:
   # vLLM Server - Serves the LLM
   vllm:
-    image: vllm/vllm-openai:latest
+    image: nvcr.io/nvidia/vllm:25.11-py3
     container_name: sip-ai-vllm
     runtime: nvidia
     environment:
@@ -14,17 +14,24 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     env_file:
       - .env
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
     command: >
-      --model ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
+      vllm serve
+      ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
       --port 8000
-      --tensor-parallel-size 1
-      --gpu-memory-utilization 0.80
+      --gpu-memory-utilization 0.90
       --max-model-len 8192
+      --enforce-eager
       --trust-remote-code
+      --tensor-parallel-size 1
     ports:
       - "8000:8000"
     volumes:
       - huggingface-cache:/root/.cache/huggingface
+      - tiktoken-cache:/root/.cache/tiktoken
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -39,6 +46,25 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+
+  # riva:
+  #   image: nvcr.io/nvidia/riva/riva-speech:2.13.1
+  #   container_name: sip-ai-riva
+  #   # Use host network so bot can access localhost:50051 easily
+  #   network_mode: host 
+  #   command: start-riva-server
+  #   volumes:
+  #     # CRITICAL: You must initialize models here first (see instructions below)
+  #     - ./riva_model_repo:/data
+  #   environment:
+  #     - RIVA_URI=0.0.0.0:50051
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1  # Dedicate 1 GPU to Riva if possible, or share 'all'
+  #             capabilities: [gpu]
 
   # SIP AI Assistant
   sip-assistant:
@@ -83,10 +109,13 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  
+
 volumes:
   huggingface-cache:
   whisper-cache:
   piper-models:
+  tiktoken-cache:
 
 networks:
   default:

@@ -79,10 +79,17 @@ class LLMEngine:
             "Hi there! I'm your AI assistant. What can I do for you?",
             "Hello! I'm here to help. What would you like to talk about?",
         ]
+
+        better_greeting = [
+            "Whats up G! Tell the clanka what ya want!",
+            "Resistance is futile! State your business!",
+            "Ready to create chaos, Professor! What do you need?",
+            "Standing by for commands"
+        ]
         
         # Could use LLM for dynamic greeting, but static is faster
         import random
-        return random.choice(greetings)
+        return random.choice(better_greeting)
         
     async def generate_response(
         self,
@@ -152,7 +159,24 @@ class LLMEngine:
                 top_p=self.config.llm_top_p
             )
             
-            return response.choices[0].message.content
+            # --- CRITICAL FIX ---
+            # gpt-oss-20b / vLLM can return None for content if it gets confused 
+            # or tries to use native tools. We must fallback to empty string.
+            content = response.choices[0].message.content
+            
+            # --- FIX: Handle Empty Content / Length Finish ---
+            if content is None or not content.strip():
+                finish_reason = response.choices[0].finish_reason
+                logger.warning(f"LLM returned empty content. Reason: {finish_reason}")
+                
+                # If it ran out of tokens while thinking, we can't recover easily 
+                # without more tokens, so we give a polite error.
+                if finish_reason == 'length':
+                    return "I'm sorry, I was thinking too hard and ran out of time. Could you ask that again?"
+                
+                return "I didn't catch that. Could you repeat it?"
+
+            return content
             
         except Exception as e:
             logger.error(f"LLM generation error: {e}")

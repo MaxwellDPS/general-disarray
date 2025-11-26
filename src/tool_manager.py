@@ -73,17 +73,13 @@ class BaseTool(ABC):
 class TimerTool(BaseTool):
     """
     Set timers and reminders.
-    
-    Parameters:
-        - duration: Duration in seconds
-        - message: Message to speak when timer completes
     """
     
     name = "SET_TIMER"
     description = "Set a timer or reminder"
     
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
-        duration = params.get('duration', 300)  # Default 5 minutes
+        duration = int(params.get('duration', 300))  # Default 5 minutes
         message = params.get('message', 'Your timer is complete')
         
         # Validate duration
@@ -135,26 +131,26 @@ class TimerTool(BaseTool):
 class CallbackTool(BaseTool):
     """
     Schedule a callback call.
-    
-    Parameters:
-        - delay: Delay in seconds before callback
-        - message: Message to speak on callback
-        - uri: SIP URI to call (optional, defaults to caller)
     """
     
     name = "CALLBACK"
     description = "Schedule a callback call"
     
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
-        delay = params.get('delay', 60)
+        # Note: Actual execution for LLM calls is often intercepted by ToolManager
+        # This fallback logic ensures manual calls still work.
+        delay = int(params.get('delay', 60))
         message = params.get('message', 'This is your scheduled callback')
         uri = params.get('uri')
+        destination = params.get('destination') # Handle alternative param name
+        
+        target = uri or destination
         
         # Get caller URI if not specified
-        if not uri and self.assistant.current_call:
-            uri = self.assistant.current_call.remote_uri
+        if not target and self.assistant.current_call:
+            target = self.assistant.current_call.remote_uri
             
-        if not uri:
+        if not target:
             return ToolResult(
                 status=ToolStatus.FAILED,
                 message="No callback number available"
@@ -165,22 +161,20 @@ class CallbackTool(BaseTool):
             task_type="callback",
             delay_seconds=delay,
             message=message,
-            target_uri=uri
+            target_uri=target
         )
         
-        logger.info(f"Callback scheduled: {delay}s, uri: {uri}")
+        logger.info(f"Callback scheduled: {delay}s, uri: {target}")
         
         return ToolResult(
             status=ToolStatus.SUCCESS,
             message=f"I'll call you back in {delay} seconds",
-            data={"task_id": task_id, "delay": delay, "uri": uri}
+            data={"task_id": task_id, "delay": delay, "uri": target}
         )
 
 
 class HangupTool(BaseTool):
-    """
-    End the current call.
-    """
+    """End the current call."""
     
     name = "HANGUP"
     description = "End the current call"
@@ -194,9 +188,7 @@ class HangupTool(BaseTool):
 
 
 class StatusTool(BaseTool):
-    """
-    Get status of scheduled tasks.
-    """
+    """Get status of scheduled tasks."""
     
     name = "STATUS"
     description = "Check status of timers and callbacks"
@@ -227,12 +219,7 @@ class StatusTool(BaseTool):
 
 
 class CancelTool(BaseTool):
-    """
-    Cancel scheduled tasks.
-    
-    Parameters:
-        - task_type: Type to cancel ('timer', 'callback', or 'all')
-    """
+    """Cancel scheduled tasks."""
     
     name = "CANCEL"
     description = "Cancel timers or callbacks"
@@ -302,43 +289,53 @@ class ToolManager:
         logger.info("Tool manager stopped")
         
     async def execute_tool(self, tool_call) -> ToolResult:
-        """Execute a tool call."""
+        """Execute a tool call with interception."""
         tool_name = tool_call.name.upper()
         
         if tool_name not in self.tools:
-            logger.warning(f"Unknown tool: {tool_name}")
-            return ToolResult(
-                status=ToolStatus.FAILED,
-                message=f"Unknown tool: {tool_name}"
-            )
+            return ToolResult(status=ToolStatus.FAILED, message=f"Unknown tool: {tool_name}")
             
         tool = self.tools[tool_name]
-        
         if not tool.enabled:
-            return ToolResult(
-                status=ToolStatus.FAILED,
-                message=f"Tool {tool_name} is currently disabled"
-            )
-            
-        # Validate parameters
+            return ToolResult(status=ToolStatus.FAILED, message=f"Tool {tool_name} disabled")
+
+        # Validate base params (delay, message)
         error = tool.validate_params(tool_call.params)
         if error:
-            return ToolResult(
-                status=ToolStatus.FAILED,
-                message=error
-            )
+            return ToolResult(status=ToolStatus.FAILED, message=error)
             
-        # Execute
         try:
+            # --- INTERCEPT CALLBACK TOOL ---
+            # We handle this manually to ensure 'destination' is passed correctly
+            if tool_name == "CALLBACK":
+                delay = int(tool_call.params.get("delay", 60))
+                message = tool_call.params.get("message", "Callback notification")
+                destination = tool_call.params.get("destination") 
+                
+                # Sanitize destination
+                if destination:
+                    destination = str(destination).strip()
+                
+                logger.info(f"Processing CALLBACK: delay={delay}, dest={destination}")
+                
+                # Call App Logic directly
+                await self.assistant.schedule_callback(delay, message, destination)
+                
+                return ToolResult(
+                    status=ToolStatus.SUCCESS,
+                    message=f"Callback scheduled for {destination if destination else 'caller'}"
+                )
+            # -------------------------------
+
+            # For other tools, run normally
             result = await tool.execute(tool_call.params)
-            logger.info(f"Tool {tool_name} executed: {result.status.value}")
             return result
+            
         except Exception as e:
-            logger.error(f"Tool {tool_name} error: {e}")
-            return ToolResult(
-                status=ToolStatus.FAILED,
-                message=f"Error executing {tool_name}: {str(e)}"
-            )
+            logger.error(f"Tool execution error: {e}")
+            import traceback
+            traceback.print_exc()
+            return ToolResult(status=ToolStatus.FAILED, message=str(e))
             
     async def schedule_task(
         self,
@@ -429,8 +426,11 @@ class ToolManager:
     async def _execute_timer(self, task: ScheduledTask):
         """Execute a timer - speak the message on current call."""
         if self.assistant.current_call and self.assistant.current_call.is_active:
-            # Interrupt current conversation
-            await self.assistant._speak(task.message)
+            # Use streaming if available for consistent voice
+            if hasattr(self.assistant, '_stream_response'):
+                await self.assistant._stream_response(self.assistant.current_call, task.message)
+            else:
+                await self.assistant._speak(task.message)
         else:
             logger.warning(f"Timer {task.id} expired but no active call")
             
@@ -455,6 +455,18 @@ class ToolManager:
                     await asyncio.sleep(self.config.callback_retry_delay_s)
                     
         logger.error(f"Callback {task.id} failed after {self.config.callback_retry_attempts} attempts")
+
+    async def schedule_callback(self, delay_seconds: int, message: str, target_uri: str) -> str:
+        """
+        Bridge method required by main.py to schedule callbacks.
+        """
+        # The internal scheduler expects (task_type, delay, message, TARGET_URI)
+        return await self.schedule_task(
+            task_type="callback",
+            delay_seconds=delay_seconds,
+            message=message,
+            target_uri=target_uri # Pass URI correctly here
+        )
         
     def _cleanup_old_tasks(self):
         """Remove completed tasks older than 1 hour."""
@@ -474,25 +486,7 @@ def create_custom_tool(
     handler: Callable,
     assistant: 'SIPAIAssistant'
 ) -> BaseTool:
-    """
-    Factory function to create custom tools.
-    
-    Example:
-        async def weather_handler(params):
-            city = params.get('city', 'unknown')
-            return ToolResult(
-                status=ToolStatus.SUCCESS,
-                message=f"The weather in {city} is sunny"
-            )
-            
-        weather_tool = create_custom_tool(
-            "WEATHER",
-            "Get weather information",
-            weather_handler,
-            assistant
-        )
-        assistant.tool_manager.register_tool(weather_tool)
-    """
+    """Factory function to create custom tools."""
     
     class CustomTool(BaseTool):
         def __init__(self, name: str, description: str, handler: Callable, assistant):

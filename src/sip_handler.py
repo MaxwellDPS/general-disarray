@@ -413,8 +413,8 @@ class SIPHandler:
             
             # Configure endpoint
             ep_cfg = pj.EpConfig()
-            ep_cfg.logConfig.level = 4  # More verbose for debugging
-            ep_cfg.logConfig.consoleLevel = 4
+            ep_cfg.logConfig.level = 1  # More verbose for debugging
+            ep_cfg.logConfig.consoleLevel = 1
             ep_cfg.uaConfig.maxCalls = 4
             ep_cfg.uaConfig.userAgent = "SIP-AI-Assistant/1.0"
             
@@ -497,7 +497,7 @@ class SIPHandler:
         acc_cfg.regConfig.retryIntervalSec = 30
         acc_cfg.regConfig.firstRetryIntervalSec = 5
 
-        # acc_cfg.mediaConfig.transportConfig.publicAddr = "192.168.0.84"
+        acc_cfg.mediaConfig.transportConfig.publicAddr = "10.42.252.251"
         
         # Authentication
         if self.config.sip_password:

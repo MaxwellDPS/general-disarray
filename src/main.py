@@ -108,95 +108,138 @@ class SIPAIAssistant:
         # Play greeting
         greeting = await self.llm_engine.generate_greeting()
         logger.info(f"Generated greeting: {greeting}")
-        await self._speak(greeting)
+        await self._stream_response(call, greeting)
         
         # Start listening loop
         await self._conversation_loop(call)
         
     async def _conversation_loop(self, call):
         """
-        Main conversation loop with streaming audio and barge-in support.
+        Main conversation loop with Smart Barging (Echo Prevention).
         """
-        # Lazy import to avoid circular dependency if sip_handler imports main
         from sip_handler import PlaylistPlayer, PJSUA_AVAILABLE
 
-        # Initialize the PlaylistPlayer if this is a real PJSUA call
+        # Initialize player if needed
         if PJSUA_AVAILABLE and call.pj_call and call.pj_call.aud_med:
             if not hasattr(call, 'stream_player') or call.stream_player is None:
-                try:
-                    call.stream_player = PlaylistPlayer(call.pj_call.aud_med)
-                    logger.info("PlaylistPlayer initialized for streaming")
-                except Exception as e:
-                    logger.warning(f"Could not init PlaylistPlayer: {e}")
+                call.stream_player = PlaylistPlayer(call.pj_call.aud_med)
+        
+        # 1. Reset Pipeline on Entry (Clear any noise from connection)
+        self.audio_pipeline.vad.reset()
+        self.audio_pipeline.audio_buffer.clear()
         
         logger.info("Listening...")
 
+        import random
+        acknowledgements = ["Okay", "Sure", "Got it", "One moment", "Copy that", "On it"]
+
         while call.is_active and self.running:
             try:
-                # 1. Listen for audio (Non-blocking check)
-                # We use a short timeout so we can check other flags/states often
+                # 1. Receive Audio
                 audio_data = await self.sip_handler.receive_audio(call, timeout=0.05)
-                
                 if audio_data is None:
                     continue
 
-                # 2. Process Audio (VAD + Buffering)
-                # We use process_audio instead of transcribe directly.
-                # It buffers chunks and only returns text when a sentence finishes.
-                transcription = await self.audio_pipeline.process_audio(audio_data)
-                
-                # Check if the user is currently speaking (for Barge-In)
-                if self.audio_pipeline.vad.is_speaking:
-                    # --- BARGE-IN TRIGGER ---
-                    # If the bot is currently talking, SHUT IT UP.
-                    if hasattr(call, 'stream_player') and call.stream_player:
-                        if call.stream_player.is_playing:
-                            logger.info("Barge-in detected! Stopping playback.")
+                # 2. Check Bot State
+                is_bot_speaking = False
+                if hasattr(call, 'stream_player') and call.stream_player:
+                    is_bot_speaking = call.stream_player.is_playing
+
+                # 3. Process Audio
+                if is_bot_speaking:
+                    # --- SMART BARGE-IN MODE (With Energy Gate) ---
+                    import numpy as np
+                    
+                    # 1. Calculate Energy (Volume)
+                    # Convert bytes to 16-bit integers
+                    samples = np.frombuffer(audio_data, dtype=np.int16)
+                    # Calculate RMS (Root Mean Square) energy
+                    if len(samples) > 0:
+                        energy = np.sqrt(np.mean(samples.astype(np.float32)**2))
+                    else:
+                        energy = 0
+
+                    # 2. Check conditions: Is it Speech? AND Is it Loud enough?
+                    # We check energy FIRST to filter out quiet echoes
+                    if energy > self.config.barge_in_energy_threshold and self.audio_pipeline.vad.is_speech(audio_data):
+                        
+                        # Add to counter
+                        if not hasattr(self, '_barge_in_counter'): self._barge_in_counter = 0
+                        self._barge_in_counter += len(audio_data)
+                        
+                        # Calculate duration
+                        barge_ms = (self._barge_in_counter / (self.config.sample_rate * 2)) * 1000
+                        
+                        if barge_ms >= self.config.barge_in_min_duration_ms:
+                            logger.info(f"Barge-in! Energy={energy:.0f}, Duration={barge_ms:.0f}ms")
                             call.stream_player.stop_all()
+                            self._barge_in_counter = 0
+                    else:
+                        # Reset if user goes silent OR drops below volume threshold
+                        # This prevents "accumulating" brief noises over time
+                        self._barge_in_counter = 0
+                        
+                else:
+                    # --- NORMAL LISTENING MODE ---
+                    # Bot is silent. Record normally.
+                    
+                    # We use process_audio which handles buffering and end-of-utterance
+                    transcription = await self.audio_pipeline.process_audio(audio_data)
+                    
+                    if transcription and len(transcription.strip()) >= 2:
+                        logger.info(f"User said: {transcription}")
 
-                # If no complete sentence yet, keep listening
-                if not transcription or len(transcription.strip()) < 2:
-                    continue
+                        # --- NEW: Immediate Acknowledgement ---
+                        # Only do this for "commands" (longer phrases) to avoid being weird on "Hi"
+                        # Simple heuristic: > 2 words or contains command verbs
+                        is_command = len(transcription.split()) > 2 or \
+                                     any(w in transcription.lower() for w in ['call', 'set', 'timer', 'remind', 'cancel'])
+                        
+                        if is_command:
+                            filler = random.choice(acknowledgements)
+                            logger.info(f"Playing filler: {filler}")
+                            # This enqueues audio immediately while the LLM thinks
+                            await self._stream_response(call, filler)
+                        # --------------------------------------
+                        else:
+                            await self._stream_response(call, "Checking")
+                        
+                        # Add to history
+                        self.conversation_history.append({
+                            "role": "user",
+                            "content": transcription
+                        })
 
-                logger.info(f"User said: {transcription}")
-                
-                # Add to history
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": transcription
-                })
+                        # Generate Response
+                        response_text = await self.llm_engine.generate_response(
+                            self.conversation_history,
+                            call_context={
+                                "remote_uri": call.remote_uri,
+                                "duration": call.duration
+                            }
+                        )
+                        # --- FIX: Check for empty response ---
+                        if not response_text:
+                            logger.warning("No response generated. Clearing buffer and continuing.")
+                            self.audio_pipeline.audio_buffer.clear()
+                            self.audio_pipeline.vad.reset()
+                            continue
+                        
+                        logger.info(f"Assistant: {response_text}")
+                        self.conversation_history.append({
+                            "role": "assistant", 
+                            "content": response_text
+                        })
 
-                # 3. Generate Response
-                # Note: We generate the full text first, then stream the TTS.
-                # (You can upgrade this to stream tokens from the LLM later)
-                response_text = await self.llm_engine.generate_response(
-                    self.conversation_history,
-                    call_context={
-                        "remote_uri": call.remote_uri,
-                        "call_id": call.call_id,
-                        "duration": call.duration
-                    }
-                )
-                
-                logger.info(f"Assistant: {response_text}")
+                        # Check Hangup
+                        if self._should_hangup(transcription, response_text):
+                            await self._stream_response(call, "Goodbye!")
+                            await asyncio.sleep(2.0)
+                            await self.sip_handler.hangup_call(call)
+                            break
 
-                # Add to history
-                self.conversation_history.append({
-                    "role": "assistant", 
-                    "content": response_text
-                })
-
-                # Check for hangup
-                if self._should_hangup(transcription, response_text):
-                    await self._stream_response(call, "Goodbye!")
-                    # Wait briefly for audio to queue before hanging up
-                    await asyncio.sleep(2.0)
-                    await self.sip_handler.hangup_call(call)
-                    break
-
-                # 4. Stream Audio Response
-                # This yields chunks of audio to play immediately
-                await self._stream_response(call, response_text)
+                        # Speak
+                        await self._stream_response(call, response_text)
 
             except asyncio.CancelledError:
                 break
@@ -209,7 +252,6 @@ class SIPAIAssistant:
         if hasattr(call, 'stream_player') and call.stream_player:
             call.stream_player.stop_all()
         self.current_call = None
-        self.conversation_history = []
 
     async def _stream_response(self, call, text: str):
         """
@@ -279,20 +321,94 @@ class SIPAIAssistant:
         return any(phrase in user_lower for phrase in hangup_phrases)
         
     # Methods for tools to call back into
-    async def schedule_callback(self, delay_seconds: int, message: str):
-        """Schedule a callback (used by timer tool)."""
+    async def schedule_callback(self, delay_seconds: int, message: str, destination: str = None):
+        """
+        Schedule a callback, optionally to a specific number.
+        """
+        target_uri = destination
+        
+        # 1. Fallback to current caller if no destination provided
+        if not target_uri and self.current_call:
+             target_uri = self.current_call.remote_uri
+        
+        if not target_uri:
+            logger.warning("Callback requested but no destination available")
+            return
+
+        # 2. Format as SIP URI if it's just a number (e.g. "405")
+        # Remove any spaces or hyphens first
+        target_uri = target_uri.replace("-", "").replace(" ", "")
+        
+        if "sip:" not in target_uri:
+             # Construct full URI: sip:NUMBER@DOMAIN
+             target_uri = f"sip:{target_uri}@{self.config.sip_domain}"
+        
+        logger.info(f"Scheduling callback to {target_uri} in {delay_seconds}s")
+        
+        # 3. Pass to ToolManager
         await self.tool_manager.schedule_callback(
             delay_seconds, 
-            self.current_call.remote_uri if self.current_call else None,
-            message
+            message,
+            target_uri,
         )
         
     async def make_outbound_call(self, uri: str, message: str):
-        """Make an outbound call (used by callback tool)."""
+        """
+        Make an outbound call and transition to a full interactive session.
+        """
+        logger.info(f"Initiating callback to {uri}...")
+        
         call = await self.sip_handler.make_call(uri)
-        if call:
-            await self._speak(message)
-            await asyncio.sleep(2)
+        if not call:
+            logger.error("Failed to create call")
+            return
+
+        # Ringing Loop (Max 30s)
+        logger.info("Ringing...")
+        timeout = 30
+        start_time = time.time()
+        answered = False
+        
+        while time.time() - start_time < timeout:
+            if call.is_active:
+                answered = True
+                break
+            if call.call_id not in self.sip_handler.active_calls:
+                logger.info("Call rejected or failed.")
+                return
+            await asyncio.sleep(0.5)
+
+        if answered:
+            logger.info("Call answered! Starting interactive session...")
+            
+            self.current_call = call
+            self.conversation_history = []
+            
+            # Init Player
+            from sip_handler import PlaylistPlayer, PJSUA_AVAILABLE
+            if PJSUA_AVAILABLE and call.pj_call and call.pj_call.aud_med:
+                 if not hasattr(call, 'stream_player') or call.stream_player is None:
+                    call.stream_player = PlaylistPlayer(call.pj_call.aud_med)
+
+            # --- FIX: Stabilize Audio ---
+            # Wait for RTP to stabilize
+            await asyncio.sleep(1.0)
+            
+            # Drain the VAD buffer so previous ringback tone isn't counted as user speech
+            self.audio_pipeline.vad.reset()
+            self.audio_pipeline.audio_buffer.clear()
+            if hasattr(self, '_barge_in_counter'):
+                self._barge_in_counter = 0
+            # ----------------------------
+
+            # Play the message
+            await self._stream_response(call, message)
+            
+            # Enter loop
+            await self._conversation_loop(call)
+            
+        else:
+            logger.info("No answer after 30 seconds. Hanging up.")
             await self.sip_handler.hangup_call(call)
 
 

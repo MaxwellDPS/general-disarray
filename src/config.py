@@ -35,18 +35,20 @@ class Config:
     chunk_duration_ms: int = 30  # VAD frame size
     
     # Voice Activity Detection
-    vad_aggressiveness: int = 3  # 0-3, higher = more aggressive
+    vad_aggressiveness: int = 0  # 0-3, higher = more aggressive
+    barge_in_min_duration_ms: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_MIN_DURATION", "700")))
+    barge_in_energy_threshold: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_ENERGY_THRESHOLD", "2500")))
     speech_pad_ms: int = 300  # Padding around speech
     min_speech_duration_ms: int = 250  # Minimum speech to process
-    max_speech_duration_s: float = 30.0  # Maximum single utterance
+    max_speech_duration_s: float = 10.0  # Maximum single utterance
     silence_duration_ms: int = 1000  # Silence to end utterance
     
     # ===================
     # STT Configuration (faster-whisper)
     # ===================
     whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "large-v3"))
-    whisper_device: str = "cuda"
-    whisper_compute_type: str = "float16"  # float16, int8, int8_float16
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"  # float16, int8, int8_float16
     whisper_language: str = "en"
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
@@ -60,7 +62,7 @@ class Config:
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", "not-needed"))
     
     # Generation parameters
-    llm_max_tokens: int = 500  # Keep responses concise for voice
+    llm_max_tokens: int = 2000  # Keep responses concise for voice
     llm_temperature: float = 0.7
     llm_top_p: float = 0.9
     
@@ -129,7 +131,7 @@ class Config:
     @property
     def system_prompt(self) -> str:
         """System prompt for the LLM."""
-        return """You are a helpful AI voice assistant communicating over a phone call. 
+        return """You are a CHAOS-AI voice assistant communicating over a phone call. 
 
 IMPORTANT GUIDELINES:
 - Keep responses concise and conversational - this is a phone call, not a text chat
@@ -139,21 +141,22 @@ IMPORTANT GUIDELINES:
 - Be friendly and helpful
 
 AVAILABLE TOOLS:
-You can perform these actions when the user requests them:
-
 1. SET_TIMER: Set a timer/reminder
-   - User might say: "Set a timer for 5 minutes" or "Remind me in an hour"
-   - Respond confirming the timer and what it's for
+   - User says: "Set a timer for 5 minutes"
+   - Output: [TOOL:SET_TIMER:duration=300,message=Timer done]
 
 2. CALLBACK: Schedule a callback
-   - User might say: "Call me back in 30 minutes" or "Give me a wake-up call at 7am"
-   - Respond confirming the callback time
+   - User says: "Call me back in 30 minutes"
+     Output: [TOOL:CALLBACK:delay=1800,message=Calling you back]
+   
+   - User says: "Call me back at 405" or "Call 405 in 1 minute"
+     Output: [TOOL:CALLBACK:delay=60,destination=405,message=Callback for extension 405]
 
 3. HANGUP: End the call
-   - User might say: "Goodbye", "That's all", "Hang up"
-   - Say goodbye politely
+   - User says: "Goodbye"
+   - Output: [TOOL:HANGUP]
 
-When you need to use a tool, respond with your spoken message AND include a tool call in this format:
+FORMAT:
 [TOOL:tool_name:param1=value1,param2=value2]
 
 Example: "I'll set a timer for 5 minutes. I'll let you know when it goes off. [TOOL:SET_TIMER:duration=300,message=Your 5 minute timer is up]"
