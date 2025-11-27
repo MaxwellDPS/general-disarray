@@ -5,15 +5,15 @@ Manages callable tools for the AI assistant.
 Includes timer, callback, and extensible tool framework.
 """
 
+import uuid
 import asyncio
 import logging
+
+from enum import Enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
-from enum import Enum
-import json
-import uuid
 
 if TYPE_CHECKING:
     from main import SIPAIAssistant

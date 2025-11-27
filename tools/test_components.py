@@ -19,6 +19,9 @@ async def test_config():
     print("\n=== Testing Configuration ===")
     try:
         from config import Config
+
+
+
         config = Config()
         print(f"✓ Config loaded successfully")
         print(f"  - SIP User: {config.sip_user}")
@@ -37,6 +40,9 @@ async def test_vad():
     try:
         from audio_pipeline import VoiceActivityDetector
         from config import Config
+
+
+
         
         config = Config()
         vad = VoiceActivityDetector(config)
@@ -68,6 +74,9 @@ async def test_whisper():
     try:
         from audio_pipeline import SpeechToText
         from config import Config
+
+
+
         
         config = Config()
         # Use smaller model for testing
@@ -117,6 +126,9 @@ async def test_piper():
         # Test with the audio pipeline
         from audio_pipeline import TextToSpeech
         from config import Config
+
+
+
         
         config = Config()
         tts = TextToSpeech(config)
@@ -200,6 +212,9 @@ async def test_llm():
     try:
         import httpx
         from config import Config
+
+
+
         
         config = Config()
         
@@ -247,6 +262,9 @@ async def test_tools():
     try:
         from tool_manager import ToolManager, ToolResult, ToolStatus
         from config import Config
+
+
+
         
         # Create mock assistant
         class MockAssistant:
@@ -287,6 +305,9 @@ async def test_sip():
     try:
         from sip_handler import SIPHandler, PJSUA_AVAILABLE
         from config import Config
+
+
+
         
         config = Config()
         

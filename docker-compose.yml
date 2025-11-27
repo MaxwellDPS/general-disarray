@@ -1,10 +1,16 @@
 # Docker Compose for SIP AI Assistant
 # ====================================
-# For GB10/Grace Blackwell with 100GB+ VRAM
-
+# Optimized for GB10/Grace Blackwell with 100GB+ VRAM
+#
+# Services:
+#   - vllm: LLM server (Llama 3.1 70B)
+#   - xtts: XTTS2 streaming TTS server  
+#   - sip-assistant: Main SIP application
 
 services:
+  # ============================================================================
   # vLLM Server - Serves the LLM
+  # ============================================================================
   vllm:
     image: nvcr.io/nvidia/vllm:25.11-py3
     container_name: sip-ai-vllm
@@ -22,16 +28,13 @@ services:
       vllm serve
       ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
       --port 8000
-      --gpu-memory-utilization 0.90
+      --gpu-memory-utilization 0.60
       --max-model-len 8192
-      --enforce-eager
       --trust-remote-code
-      --tensor-parallel-size 1
     ports:
       - "8000:8000"
     volumes:
-      - huggingface-cache:/root/.cache/huggingface
-      - tiktoken-cache:/root/.cache/tiktoken
+      - ./cache/huggingface-cache:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -47,59 +50,36 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
-  # riva:
-  #   image: nvcr.io/nvidia/riva/riva-speech:2.13.1
-  #   container_name: sip-ai-riva
-  #   # Use host network so bot can access localhost:50051 easily
-  #   network_mode: host 
-  #   command: start-riva-server
-  #   volumes:
-  #     # CRITICAL: You must initialize models here first (see instructions below)
-  #     - ./riva_model_repo:/data
-  #   environment:
-  #     - RIVA_URI=0.0.0.0:50051
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1  # Dedicate 1 GPU to Riva if possible, or share 'all'
-  #             capabilities: [gpu]
-
-  # SIP AI Assistant
-  sip-assistant:
+  # ============================================================================
+  # XTTS Server - High-quality streaming TTS
+  # ============================================================================
+  xtts:
     build:
-      context: .
+      context: xtts-api
       dockerfile: Dockerfile
-    container_name: sip-ai-assistant
-    network_mode: "host"
+    container_name: sip-ai-xtts
     runtime: nvidia
-    depends_on:
-      vllm:
-        condition: service_healthy
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - LLM_BACKEND=vllm
-      - LLM_BASE_URL=http://localhost:8000/v1
-      - LLM_MODEL=${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
-      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
-      - WHISPER_DEVICE=cuda
-      - PIPER_MODEL=${PIPER_MODEL:-en_US-amy-medium}
-      - PIPER_MODEL_PATH=/opt/piper/models
-      - SIP_USER=${SIP_USER:-ai-assistant}
-      - SIP_PASSWORD=${SIP_PASSWORD:-}
-      - SIP_DOMAIN=${SIP_DOMAIN:-localhost}
-      - SIP_PORT=${SIP_PORT:-5060}
-      - SIP_REGISTRAR=${SIP_REGISTRAR:-}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - XTTS_HOST=0.0.0.0
+      - XTTS_PORT=8001
+      - XTTS_SAMPLE_RATE=24000
+      - XTTS_TEMPERATURE=${XTTS_TEMPERATURE:-0.7}
+      - XTTS_TOP_K=${XTTS_TOP_K:-50}
+      - XTTS_TOP_P=${XTTS_TOP_P:-0.85}
+      - XTTS_REPETITION_PENALTY=${XTTS_REPETITION_PENALTY:-2.0}
+      - VOICES_DIR=/app/data/voices
     ports:
-      - "5060:5060/udp"
-      - "5060:5060/tcp"
-      - "10000-10100:10000-10100/udp"  # RTP ports
+      - "8001:8001"
     volumes:
-      - ./data:/app/data
-      - whisper-cache:/root/.cache/huggingface
-      - piper-models:/opt/piper/models
+      - ./data/voices:/app/data/voices
+      - ./cache/xtts-cache:/root/.local/share/tts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     deploy:
       resources:
         reservations:
@@ -109,14 +89,76 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
-  
+  # ============================================================================
+  # SIP AI Assistant - Main application
+  # ============================================================================
+  sip-agent:
+    build:
+      context: sip-agent/
+      dockerfile: Dockerfile
+    container_name: sip-ai-assistant
+    # network_mode: "host"
+    runtime: nvidia
+    depends_on:
+      vllm:
+        condition: service_healthy
+      xtts:
+        condition: service_healthy
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      # LLM settings
+      - LLM_BACKEND=vllm
+      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_MODEL=${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
+      # Whisper settings (standard whisper with CUDA)
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      - WHISPER_DEVICE=cuda
+      - WHISPER_LANGUAGE=en
+      # XTTS settings
+      - XTTS_API_URL=http://xtts:8001
+      - XTTS_DEFAULT_VOICE=${XTTS_DEFAULT_VOICE:-}
+      # SIP settings
+      - SIP_USER=${SIP_USER:-ai-assistant}
+      - SIP_PASSWORD=${SIP_PASSWORD:-}
+      - SIP_DOMAIN=${SIP_DOMAIN:-localhost}
+      - SIP_PORT=${SIP_PORT:-5060}
+      - SIP_REGISTRAR=${SIP_REGISTRAR:-}
+      # General
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "10000-10100:10000-10100/udp"  # RTP ports
+    volumes:
+      - ./data:/app/data
+      - ./cache/whisper-cache:/root/.cache/whisper
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
 
-volumes:
-  huggingface-cache:
-  whisper-cache:
-  piper-models:
-  tiktoken-cache:
 
+# ============================================================================
+# Volumes
+# ============================================================================
+# volumes:
+#   huggingface-cache:
+#     name: sip-ai-hf-cache
+#   whisper-cache:
+#     name: sip-ai-whisper-cache
+#   xtts-cache:
+#     name: sip-ai-xtts-cache
+#   tiktoken-cache:
+#     name: sip-ai-tiktoken-cache
+
+
+# ============================================================================
+# Networks
+# ============================================================================
 networks:
   default:
     driver: bridge

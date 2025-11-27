@@ -5,13 +5,11 @@ Handles LLM inference with tool calling support.
 Supports multiple backends: vLLM, Ollama, LM Studio.
 """
 
-import asyncio
-import json
-import logging
 import re
+import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+from typing import List, Dict, Any, Optional, Tuple
 
 try:
     from openai import AsyncOpenAI
@@ -27,8 +25,10 @@ except ImportError:
 
 from config import Config
 
-logger = logging.getLogger(__name__)
 
+
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ToolCall:

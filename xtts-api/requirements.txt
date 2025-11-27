@@ -1,0 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+# PyTorch (CUDA 12.4)
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# Standard Libraries
+fastapi
+uvicorn[standard]
+httpx
+python-multipart
+pydantic
+numpy
+scipy
+soundfile
+TTS
+transformers==4.42.4
