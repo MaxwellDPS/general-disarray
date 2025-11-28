@@ -70,6 +70,7 @@ class CallInfo:
     playback_queue: deque = None
     media_ready: bool = False
     stream_player: Any = None  # PlaylistPlayer
+    record_file_pos: int = 0  # Track how much we've read from recording
     
     def __post_init__(self):
         if self.audio_buffer is None:
@@ -764,16 +765,75 @@ class SIPHandler:
             
     async def receive_audio(self, call_info: CallInfo, timeout: float = 0.1) -> Optional[bytes]:
         """
-        Receive audio from a call.
+        Receive audio from a call by reading from the recording file.
         
-        Note: In real implementation, this would read from the recorder.
-        For now, returns None to indicate no new audio.
+        PJSIP records to a WAV file - we read new data as it's written.
+        Returns chunks of raw PCM audio (16-bit mono).
         """
-        # TODO: Implement proper audio capture
-        # This would involve reading from call_info.record_file
-        # or setting up a custom AudioMedia sink
-        await asyncio.sleep(timeout)
-        return None
+        if not call_info or not call_info.record_file:
+            await asyncio.sleep(timeout)
+            return None
+            
+        try:
+            # Check if file exists and has data
+            if not os.path.exists(call_info.record_file):
+                await asyncio.sleep(timeout)
+                return None
+                
+            file_size = os.path.getsize(call_info.record_file)
+            
+            # WAV header is 44 bytes for standard PCM
+            WAV_HEADER_SIZE = 44
+            
+            # Initialize read position past the header on first read
+            if call_info.record_file_pos == 0:
+                call_info.record_file_pos = WAV_HEADER_SIZE
+                logger.info(f"Recording file: {call_info.record_file}, initial size: {file_size} bytes")
+                
+            # Log file size changes periodically for debugging
+            if not hasattr(call_info, '_last_size_log'):
+                call_info._last_size_log = 0
+                call_info._last_size_log_time = 0
+                
+            now = time.time()
+            if file_size != call_info._last_size_log and (now - call_info._last_size_log_time) > 2:
+                logger.info(f"Recording file size: {file_size} bytes, read pos: {call_info.record_file_pos}")
+                call_info._last_size_log = file_size
+                call_info._last_size_log_time = now
+                
+            # Check if there's new data to read
+            if file_size <= call_info.record_file_pos:
+                await asyncio.sleep(timeout)
+                return None
+                
+            # Calculate how much new data is available
+            available = file_size - call_info.record_file_pos
+            
+            # Read in chunks (20ms at 16kHz = 640 bytes for 16-bit mono)
+            chunk_size = int(self.config.sample_rate * 0.02 * 2)  # 20ms chunk
+            bytes_to_read = min(available, chunk_size * 5)  # Read up to 100ms at a time
+            
+            if bytes_to_read < chunk_size:
+                # Not enough data for a full chunk yet
+                await asyncio.sleep(timeout)
+                return None
+                
+            # Read the new audio data
+            with open(call_info.record_file, 'rb') as f:
+                f.seek(call_info.record_file_pos)
+                audio_data = f.read(bytes_to_read)
+                
+            if audio_data:
+                call_info.record_file_pos += len(audio_data)
+                return audio_data
+                
+            await asyncio.sleep(timeout)
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error reading audio: {e}")
+            await asyncio.sleep(timeout)
+            return None
         
     async def send_audio(self, call_info: CallInfo, audio_data: bytes):
         """Send audio to a call using the playlist player."""
@@ -795,50 +855,3 @@ class SIPHandler:
             
         # Enqueue for playback
         player.enqueue_file(wav_path)
-
-
-# ============================================================================
-# Asterisk ARI Handler (Alternative)
-# ============================================================================
-
-class AsteriskARIHandler:
-    """Alternative SIP handler using Asterisk ARI."""
-    
-    def __init__(self, config: Config, on_call_callback: Callable):
-        self.config = config
-        self.on_call_callback = on_call_callback
-        self.ari_url = os.getenv("ARI_URL", "http://localhost:8088")
-        self.ari_user = os.getenv("ARI_USER", "asterisk")
-        self.ari_password = os.getenv("ARI_PASSWORD", "asterisk")
-        self.app_name = "sip-ai-assistant"
-        
-    async def start(self):
-        """Connect to Asterisk ARI."""
-        try:
-            import ari
-            self.client = ari.connect(
-                self.ari_url,
-                self.ari_user,
-                self.ari_password
-            )
-            self.client.on_channel_event('StasisStart', self._on_stasis_start)
-            self.client.run(apps=self.app_name)
-        except ImportError:
-            logger.warning("ari-py not installed")
-            
-    def _on_stasis_start(self, channel, event):
-        """Handle new channel."""
-        asyncio.run_coroutine_threadsafe(
-            self._handle_channel(channel),
-            asyncio.get_event_loop()
-        )
-        
-    async def _handle_channel(self, channel):
-        """Handle incoming channel."""
-        call_info = CallInfo(
-            call_id=channel.id,
-            remote_uri=channel.json.get('caller', {}).get('number', 'unknown'),
-            is_active=True,
-            start_time=time.time()
-        )
-        await self.on_call_callback(call_info)

@@ -58,8 +58,10 @@ class Config:
     whisper_response_format: str = "json"
     
     # TTS settings (Piper/Kokoro via Speaches)
-    tts_model: str = field(default_factory=lambda: os.getenv("TTS_MODEL", "rhasspy/piper-voices"))
-    tts_voice: str = field(default_factory=lambda: os.getenv("TTS_VOICE", "en_US-lessac-medium"))
+    # Default to Kokoro which is well-supported by Speaches
+    # Alternative: use piper voices like "rhasspy/piper-voice-en_US-lessac-medium"
+    tts_model: str = field(default_factory=lambda: os.getenv("TTS_MODEL", "speaches-ai/Kokoro-82M-v1.0-ONNX"))
+    tts_voice: str = field(default_factory=lambda: os.getenv("TTS_VOICE", "af_heart"))
     tts_response_format: str = field(default_factory=lambda: os.getenv("TTS_RESPONSE_FORMAT", "wav"))
     tts_speed: float = field(default_factory=lambda: float(os.getenv("TTS_SPEED", "1.0")))
     

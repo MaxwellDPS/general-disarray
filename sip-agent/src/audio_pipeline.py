@@ -171,19 +171,60 @@ class WhisperAPIClient:
         self.available = False
         
     async def initialize(self):
-        """Initialize the API client."""
-        self.client = httpx.AsyncClient(timeout=60.0)
+        """Initialize the API client and ensure model is downloaded."""
+        self.client = httpx.AsyncClient(timeout=120.0)  # Longer timeout for model download
         
         try:
             response = await self.client.get(f"{self.base_url}/health")
             if response.status_code == 200:
-                self.available = True
                 logger.info(f"Whisper API (Speaches) available at {self.base_url}")
+                
+                # Ensure the STT model is downloaded
+                await self._ensure_model_downloaded()
+                
+                self.available = True
             else:
                 logger.warning(f"Whisper API returned status {response.status_code}")
         except Exception as e:
             logger.warning(f"Whisper API not available: {e}")
             self.available = False
+            
+    async def _ensure_model_downloaded(self):
+        """
+        Ensure the Whisper model is downloaded.
+        Speaches will auto-download on first use, but we can trigger it early.
+        """
+        try:
+            import urllib.parse
+            encoded_model = urllib.parse.quote(self.model, safe='')
+            
+            # Check if model exists by trying to get model info
+            response = await self.client.get(f"{self.base_url}/v1/models")
+            if response.status_code == 200:
+                models = response.json().get('data', [])
+                model_ids = [m.get('id', '') for m in models]
+                
+                if self.model in model_ids:
+                    logger.info(f"STT model '{self.model}' is already available")
+                    return
+                    
+            # Model not found, trigger download
+            logger.info(f"Downloading STT model: {self.model}")
+            logger.info("This may take a few minutes on first run...")
+            
+            response = await self.client.post(
+                f"{self.base_url}/v1/models/{encoded_model}",
+                timeout=300.0
+            )
+            
+            if response.status_code in (200, 201):
+                logger.info(f"STT model '{self.model}' download initiated/completed")
+            else:
+                logger.warning(f"STT model download response: {response.status_code}")
+                
+        except Exception as e:
+            logger.warning(f"Could not pre-download STT model: {e}")
+            # Continue anyway - Speaches will download on first use
             
     async def close(self):
         """Close the client."""
@@ -245,6 +286,11 @@ class SpeachesTTSClient:
     
     Uses the /v1/audio/speech endpoint with Piper or Kokoro models.
     Returns audio in the configured format (wav by default).
+    
+    Supported models:
+    - speaches-ai/Kokoro-82M-v1.0-ONNX (recommended, high quality)
+    - hexgrad/Kokoro-82M (alternative Kokoro)
+    - Piper voices via rhasspy/* repos (e.g., rhasspy/piper-voice-en_US-lessac-medium)
     """
     
     # Sample rates for different TTS backends
@@ -274,26 +320,107 @@ class SpeachesTTSClient:
             self.tts_sample_rate = self.PIPER_SAMPLE_RATE
         
     async def initialize(self):
-        """Test connection to Speaches TTS API."""
-        self.client = httpx.AsyncClient(timeout=60.0)
+        """Test connection to Speaches TTS API and ensure model is downloaded."""
+        self.client = httpx.AsyncClient(timeout=120.0)  # Longer timeout for model download
         
         try:
             # Test the health endpoint
             response = await self.client.get(f"{self.base_url}/health")
-            if response.status_code == 200:
-                self.available = True
-                logger.info(f"Speaches TTS available at {self.base_url}")
-                logger.info(f"TTS model: {self.model}, voice: {self.voice}")
-                
-                # Pre-cache common phrases
-                if self.cache_enabled:
-                    await self._precache_phrases()
-            else:
+            if response.status_code != 200:
                 logger.warning(f"Speaches TTS health check failed: {response.status_code}")
+                return
+                
+            logger.info(f"Speaches TTS available at {self.base_url}")
+            
+            # Ensure the TTS model is downloaded
+            if not await self._ensure_model_downloaded():
+                logger.error(f"Failed to download TTS model: {self.model}")
+                return
+                
+            self.available = True
+            logger.info(f"TTS model: {self.model}, voice: {self.voice}")
+            
+            # Pre-cache common phrases
+            if self.cache_enabled:
+                await self._precache_phrases()
                 
         except Exception as e:
             logger.warning(f"Speaches TTS not available: {e}")
             self.available = False
+            
+    async def _ensure_model_downloaded(self) -> bool:
+        """
+        Check if model is installed, download if not.
+        
+        Speaches uses POST /v1/models/{model_id} to download models.
+        """
+        try:
+            # First, try a test synthesis to see if model is already available
+            test_response = await self.client.post(
+                f"{self.base_url}/v1/audio/speech",
+                json={
+                    "model": self.model,
+                    "voice": self.voice,
+                    "input": "test",
+                    "response_format": self.response_format,
+                },
+                timeout=10.0
+            )
+            
+            if test_response.status_code == 200:
+                logger.info(f"TTS model '{self.model}' is already available")
+                return True
+                
+            # Check if it's a "model not installed" error
+            if test_response.status_code == 404:
+                error_detail = test_response.json().get('detail', '')
+                if 'not installed' in error_detail.lower():
+                    logger.info(f"TTS model '{self.model}' not installed, downloading...")
+                    return await self._download_model()
+                    
+            logger.error(f"TTS test failed: {test_response.status_code} - {test_response.text}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking TTS model availability: {e}")
+            return False
+            
+    async def _download_model(self) -> bool:
+        """
+        Download a model via POST /v1/models/{model_id}.
+        """
+        try:
+            # URL-encode the model ID for the path
+            import urllib.parse
+            encoded_model = urllib.parse.quote(self.model, safe='')
+            
+            logger.info(f"Downloading TTS model: {self.model}")
+            logger.info("This may take a few minutes on first run...")
+            
+            # POST to download the model
+            response = await self.client.post(
+                f"{self.base_url}/v1/models/{encoded_model}",
+                timeout=300.0  # 5 minute timeout for model download
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully downloaded TTS model: {self.model}")
+                return True
+            elif response.status_code == 201:
+                logger.info(f"TTS model download started: {self.model}")
+                # Wait a bit for model to be ready
+                await asyncio.sleep(5)
+                return True
+            else:
+                logger.error(f"Failed to download TTS model: {response.status_code} - {response.text}")
+                return False
+                
+        except asyncio.TimeoutError:
+            logger.error("TTS model download timed out (>5 minutes)")
+            return False
+        except Exception as e:
+            logger.error(f"Error downloading TTS model: {e}")
+            return False
             
     async def _precache_phrases(self):
         """Pre-synthesize common acknowledgments."""

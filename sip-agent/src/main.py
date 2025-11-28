@@ -9,21 +9,18 @@ All ML inference offloaded to dedicated services:
 This container is lightweight - just orchestration.
 """
 
-import os
 import time
 import signal
 import asyncio
 import logging
 import random
-from typing import Optional, List, Dict
-
-import numpy as np
+from typing import List, Dict
 
 from config import Config, get_config
 from tool_manager import ToolManager
 from llm_engine import create_llm_engine
-from sip_handler import SIPHandler, PJSUA_AVAILABLE
-from audio_pipeline import LowLatencyAudioPipeline, LatencyMetrics
+from sip_handler import SIPHandler
+from audio_pipeline import LowLatencyAudioPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -231,6 +228,9 @@ class SIPAIAssistant:
         """Main audio processing loop."""
         logger.info("Audio processing loop started")
         
+        audio_received_count = 0
+        last_log_time = time.time()
+        
         while self.running and self.current_call:
             try:
                 # Check call state
@@ -251,6 +251,13 @@ class SIPAIAssistant:
                     )
                     
                     if audio_chunk:
+                        audio_received_count += 1
+                        
+                        # Log periodically
+                        if time.time() - last_log_time > 5:
+                            logger.info(f"Audio chunks received: {audio_received_count}")
+                            last_log_time = time.time()
+                        
                         # Check for barge-in
                         if self._processing and self.audio_pipeline.has_speech(audio_chunk):
                             logger.info("Barge-in detected")

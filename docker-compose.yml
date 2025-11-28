@@ -69,9 +69,11 @@ services:
       - WHISPER__INFERENCE_CONFIG__LANGUAGE=${WHISPER_LANGUAGE:-en}
       - WHISPER__INFERENCE_CONFIG__VAD_FILTER=true
       - WHISPER__INFERENCE_CONFIG__BEST_OF=1
+      # Model TTL settings - prevent unloading (-1 = never unload)
+      - STT__TTL=-1
+      - TTS__TTL=-1
+      - VAD__TTL=-1
       # TTS is configured via API request parameters (model/voice)
-      # Default TTS model can be set here if needed:
-      # - TTS__DEFAULT_MODEL=${TTS_MODEL:-rhasspy/piper-voices}
     ports:
       - "8001:8000"
     volumes:
@@ -115,9 +117,9 @@ services:
       # STT settings
       - WHISPER_MODEL=${WHISPER_MODEL:-Systran/faster-distil-whisper-small.en}
       - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
-      # TTS settings (Piper via Speaches)
-      - TTS_MODEL=${TTS_MODEL:-rhasspy/piper-voices}
-      - TTS_VOICE=${TTS_VOICE:-en_US-lessac-medium}
+      # TTS settings (Kokoro via Speaches - auto-downloaded on first use)
+      - TTS_MODEL=${TTS_MODEL:-speaches-ai/Kokoro-82M-v1.0-ONNX}
+      - TTS_VOICE=${TTS_VOICE:-af_heart}
       - TTS_RESPONSE_FORMAT=${TTS_RESPONSE_FORMAT:-wav}
       - TTS_SPEED=${TTS_SPEED:-1.0}
       # SIP settings
