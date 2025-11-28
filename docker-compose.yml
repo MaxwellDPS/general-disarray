@@ -1,11 +1,12 @@
-# Docker Compose for SIP AI Assistant
-# ====================================
+# Docker Compose for SIP AI Assistant with Fish Speech + Whisper API
+# ===================================================================
 # Optimized for GB10/Grace Blackwell with 100GB+ VRAM
 #
 # Services:
 #   - vllm: LLM server (Llama 3.1 70B)
-#   - xtts: XTTS2 streaming TTS server  
-#   - sip-assistant: Main SIP application
+#   - whisper: Faster-Whisper STT server (OpenAI-compatible API)
+#   - fish-speech: Fish Speech / OpenAudio TTS server (streaming)
+#   - sip-agent: Main SIP application
 
 services:
   # ============================================================================
@@ -28,7 +29,7 @@ services:
       vllm serve
       ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
       --port 8000
-      --gpu-memory-utilization 0.60
+      --gpu-memory-utilization 0.50
       --max-model-len 8192
       --trust-remote-code
     ports:
@@ -51,35 +52,35 @@ services:
     restart: unless-stopped
 
   # ============================================================================
-  # XTTS Server - High-quality streaming TTS
+  # Whisper Server - Speech-to-Text (OpenAI-compatible API)
+  # Uses speaches/faster-whisper-server
   # ============================================================================
-  xtts:
-    build:
-      context: xtts-api
-      dockerfile: Dockerfile
-    container_name: sip-ai-xtts
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: sip-ai-whisper
     runtime: nvidia
+    ipc: host
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - XTTS_HOST=0.0.0.0
-      - XTTS_PORT=8001
-      - XTTS_SAMPLE_RATE=24000
-      - XTTS_TEMPERATURE=${XTTS_TEMPERATURE:-0.7}
-      - XTTS_TOP_K=${XTTS_TOP_K:-50}
-      - XTTS_TOP_P=${XTTS_TOP_P:-0.85}
-      - XTTS_REPETITION_PENALTY=${XTTS_REPETITION_PENALTY:-2.0}
-      - VOICES_DIR=/app/data/voices
+      # Use smaller/faster distilled model
+      - WHISPER__MODEL=Systran/faster-distil-whisper-small.en
+      - WHISPER__COMPUTE_TYPE=float32 
+      - WHISPER__DEVICE=cuda
+      # Faster inference settings
+      - WHISPER__INFERENCE_CONFIG__BEAM_SIZE=1
+      - WHISPER__INFERENCE_CONFIG__LANGUAGE=${WHISPER_LANGUAGE:-en}
+      - WHISPER__INFERENCE_CONFIG__VAD_FILTER=true
+      - WHISPER__INFERENCE_CONFIG__BEST_OF=1
     ports:
-      - "8001:8001"
+      - "8001:8000"
     volumes:
-      - ./data/voices:/app/data/voices
-      - ./cache/xtts-cache:/root/.local/share/tts
+      - ./cache/whisper-cache:/home/ubuntu/.cache/huggingface/hub
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 180s
+      start_period: 120s
     deploy:
       resources:
         reservations:
@@ -90,33 +91,53 @@ services:
     restart: unless-stopped
 
   # ============================================================================
-  # SIP AI Assistant - Main application
+  # Piper TTS - Fast local text-to-speech
+  # https://github.com/rhasspy/piper
+  # ============================================================================
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: sip-ai-piper
+    command: --voice en_US-amy-medium
+    ports:
+      - "10200:10200"
+    volumes:
+      - ./cache/piper:/data
+    # healthcheck:
+    #   test: ["CMD-SHELL", "echo '{}' | nc -w 1 localhost 10200 || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 60s
+    restart: unless-stopped
+
+  # ============================================================================
+  # SIP AI Assistant - Main application (lightweight, no local models)
   # ============================================================================
   sip-agent:
     build:
       context: sip-agent/
       dockerfile: Dockerfile
     container_name: sip-ai-assistant
-    # network_mode: "host"
-    runtime: nvidia
     depends_on:
       vllm:
         condition: service_healthy
-      xtts:
+      whisper:
         condition: service_healthy
+      # piper:
+      #   condition: service_healthy
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
       # LLM settings
       - LLM_BACKEND=vllm
       - LLM_BASE_URL=http://vllm:8000/v1
       - LLM_MODEL=${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
-      # Whisper settings (standard whisper with CUDA)
-      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
-      - WHISPER_DEVICE=cuda
-      - WHISPER_LANGUAGE=en
-      # XTTS settings
-      - XTTS_API_URL=http://xtts:8001
-      - XTTS_DEFAULT_VOICE=${XTTS_DEFAULT_VOICE:-}
+      # Whisper API settings
+      - WHISPER_API_URL=http://whisper:8000
+      - WHISPER_MODEL=Systran/faster-distil-whisper-small.en
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
+      # Piper TTS settings
+      - PIPER_HOST=piper
+      - PIPER_PORT=10200
+      - PIPER_VOICE=${PIPER_VOICE:-en_US-lessac-medium}
       # SIP settings
       - SIP_USER=${SIP_USER:-ai-assistant}
       - SIP_PASSWORD=${SIP_PASSWORD:-}
@@ -131,29 +152,7 @@ services:
       - "10000-10100:10000-10100/udp"  # RTP ports
     volumes:
       - ./data:/app/data
-      - ./cache/whisper-cache:/root/.cache/whisper
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
-
-
-# ============================================================================
-# Volumes
-# ============================================================================
-# volumes:
-#   huggingface-cache:
-#     name: sip-ai-hf-cache
-#   whisper-cache:
-#     name: sip-ai-whisper-cache
-#   xtts-cache:
-#     name: sip-ai-xtts-cache
-#   tiktoken-cache:
-#     name: sip-ai-tiktoken-cache
 
 
 # ============================================================================

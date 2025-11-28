@@ -180,10 +180,29 @@ class HangupTool(BaseTool):
     description = "End the current call"
     
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
-        # The main loop handles actual hangup based on response
+        # Actually hang up the call
+        if self.assistant.current_call:
+            try:
+                # Schedule hangup after a short delay to allow goodbye message to play
+                async def delayed_hangup():
+                    await asyncio.sleep(3)  # Wait for TTS to finish
+                    if self.assistant.current_call:
+                        await self.assistant.sip_handler.hangup_call(self.assistant.current_call)
+                        logger.info("Call ended via HANGUP tool")
+                asyncio.create_task(delayed_hangup())
+                return ToolResult(
+                    status=ToolStatus.SUCCESS,
+                    message="Ending call"
+                )
+            except Exception as e:
+                logger.error(f"Hangup error: {e}")
+                return ToolResult(
+                    status=ToolStatus.FAILED,
+                    message=f"Failed to end call: {e}"
+                )
         return ToolResult(
-            status=ToolStatus.SUCCESS,
-            message="Ending call"
+            status=ToolStatus.FAILED,
+            message="No active call to end"
         )
 
 
@@ -309,12 +328,22 @@ class ToolManager:
             # We handle this manually to ensure 'destination' is passed correctly
             if tool_name == "CALLBACK":
                 delay = int(tool_call.params.get("delay", 60))
-                message = tool_call.params.get("message", "Callback notification")
+                message = tool_call.params.get("message", "This is your scheduled callback")
                 destination = tool_call.params.get("destination") 
                 
                 # Sanitize destination
                 if destination:
                     destination = str(destination).strip()
+                
+                # Use caller's number if not specified or if explicitly "CALLER_NUMBER"
+                if not destination or destination.upper() == "CALLER_NUMBER":
+                    if self.assistant.current_call:
+                        destination = getattr(self.assistant.current_call, 'remote_uri', None)
+                    if not destination:
+                        return ToolResult(
+                            status=ToolStatus.FAILED,
+                            message="No callback number available - please specify a number"
+                        )
                 
                 logger.info(f"Processing CALLBACK: delay={delay}, dest={destination}")
                 
@@ -323,7 +352,7 @@ class ToolManager:
                 
                 return ToolResult(
                     status=ToolStatus.SUCCESS,
-                    message=f"Callback scheduled for {destination if destination else 'caller'}"
+                    message=f"I'll call you back in {self._format_delay(delay)}"
                 )
             # -------------------------------
 
@@ -477,6 +506,24 @@ class ToolManager:
         ]
         for task_id in to_remove:
             del self.scheduled_tasks[task_id]
+            
+    def _format_delay(self, seconds: int) -> str:
+        """Format delay for natural speech."""
+        if seconds < 60:
+            return f"{seconds} seconds"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            remaining = seconds % 60
+            if remaining == 0:
+                return f"{minutes} minute{'s' if minutes != 1 else ''}"
+            return f"{minutes} minute{'s' if minutes != 1 else ''} and {remaining} seconds"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            parts = [f"{hours} hour{'s' if hours != 1 else ''}"]
+            if minutes:
+                parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+            return " and ".join(parts)
 
 
 # Convenience function for creating custom tools

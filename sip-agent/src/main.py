@@ -1,59 +1,51 @@
 #!/usr/bin/env python3
 """
-Low-Latency SIP AI Assistant
-=============================
-Optimized for minimal response latency.
+SIP AI Assistant - API-based Architecture
+==========================================
+All ML inference offloaded to dedicated services:
+- Whisper API for STT
+- Piper for TTS
+- vLLM for LLM
 
-Key optimizations:
-1. Faster STT with aggressive VAD
-2. LLM token streaming → immediate TTS
-3. Sentence-level TTS pipelining
-4. Pre-cached acknowledgment audio
-5. Parallel processing pipeline
-
-Target: < 1 second from user stop speaking → first audio output
+This container is lightweight - just orchestration.
 """
 
+import os
 import time
-import random
 import signal
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, List, Dict
 
 import numpy as np
 
-from config import Config
-
+from config import Config, get_config
 from tool_manager import ToolManager
 from llm_engine import create_llm_engine
 from sip_handler import SIPHandler, PJSUA_AVAILABLE
-from audio_pipeline import LowLatencyAudioPipeline, StreamingResponsePipeline, LatencyMetrics
+from audio_pipeline import LowLatencyAudioPipeline, LatencyMetrics
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('sip_assistant.log')
     ]
 )
 
 logger = logging.getLogger(__name__)
 
 
-class LowLatencySIPAssistant:
+class SIPAIAssistant:
     """
-    Low-latency SIP AI Assistant.
-    
-    Optimized for fastest possible response time.
+    SIP AI Assistant with API-based ML inference.
     """
     
     def __init__(self, config: Config):
         self.config = config
         self.running = False
         
-        logger.info("Initializing Low-Latency SIP AI Assistant...")
+        logger.info("Initializing SIP AI Assistant...")
         
         # Core components
         self.tool_manager = ToolManager(self)
@@ -61,38 +53,37 @@ class LowLatencySIPAssistant:
         self.audio_pipeline = LowLatencyAudioPipeline(config)
         self.sip_handler = SIPHandler(config, self._on_call_received)
         
-        # Parallel response pipeline
-        self.response_pipeline: Optional[StreamingResponsePipeline] = None
-        
         # State
-        self.conversation_history = []
+        self.conversation_history: List[Dict] = []
         self.current_call = None
-        self._barge_in_counter = 0
+        self._processing = False
+        self._audio_loop_task = None
+        self._call_lock = asyncio.Lock()
         
-        # Pre-cached acknowledgments (will be loaded from TTS cache)
+        # Pre-cached acknowledgments
         self.acknowledgments = [
-            "Okay", "Acknowledged", "Got it", "One moment", "Copy that", "On it"
+            "Okay", "Got it", "One moment", "Sure", "Copy that"
         ]
         
     async def start(self):
         """Start all components."""
-        logger.info("Starting Low-Latency SIP AI Assistant...")
+        logger.info("Starting SIP AI Assistant...")
         self.running = True
         
         # Start components
+        logger.info("Starting LLM engine...")
         await self.llm_engine.start()
+        
+        logger.info("Starting audio pipeline...")
         await self.audio_pipeline.start()
+        
+        logger.info("Starting SIP handler...")
         await self.sip_handler.start()
+        
+        logger.info("Starting tool manager...")
         await self.tool_manager.start()
         
-        # Create response pipeline
-        self.response_pipeline = StreamingResponsePipeline(
-            self.llm_engine,
-            self.audio_pipeline.tts,
-            self.config
-        )
-        
-        logger.info("Low-Latency SIP AI Assistant ready!")
+        logger.info("SIP AI Assistant ready!")
         logger.info(f"SIP URI: sip:{self.config.sip_user}@{self.config.sip_domain}")
         
         # Keep running
@@ -100,7 +91,7 @@ class LowLatencySIPAssistant:
             await asyncio.sleep(1)
             
     async def stop(self):
-        """Stop gracefully."""
+        """Stop all components."""
         logger.info("Stopping...")
         self.running = False
         
@@ -111,349 +102,307 @@ class LowLatencySIPAssistant:
         
         logger.info("Stopped.")
         
-    async def _on_call_received(self, call):
-        """Handle incoming call with fast greeting."""
-        logger.info(f"Incoming call from: {call.remote_uri}")
-        self.current_call = call
-        self.conversation_history = []
-        
-        # Wait for media
-        wait_start = time.time()
-        while not call.media_ready and time.time() - wait_start < 3.0:
-            await asyncio.sleep(0.05)
-            
-        if not call.media_ready:
-            logger.warning("Media not ready")
+    async def _on_call_received(self, call_info):
+        """Handle incoming call."""
+        # Prevent duplicate handling
+        if self._call_lock.locked():
+            logger.warning("Call already being handled, ignoring duplicate callback")
             return
             
-        logger.info("Media ready")
-        
-        # Initialize playlist player through SIPHandler (thread-safe)
-        if PJSUA_AVAILABLE and call.pj_call and call.pj_call.aud_med:
-            call.stream_player = self.sip_handler.get_playlist_player(call)
-                
-        # Play greeting (use cached if available)
-        greeting = "Ready for commands"
-        await self._play_response(call, greeting)
-        
-        # Start conversation loop
-        await self._fast_conversation_loop(call)
-        
-    async def _fast_conversation_loop(self, call):
-        """
-        Optimized conversation loop with parallel processing.
-        """
-        # Reset state
-        self.audio_pipeline.vad.reset()
-        self.audio_pipeline.audio_buffer.clear()
-        self._barge_in_counter = 0
-        
-        logger.info("Listening (low-latency mode)...")
-        
-        while call.is_active and self.running:
+        async with self._call_lock:
             try:
-                # Receive audio (short timeout for responsiveness)
-                audio_data = await self.sip_handler.receive_audio(call, timeout=0.03)
-                if audio_data is None:
-                    continue
-                    
-                # Check if bot is speaking
-                is_bot_speaking = False
-                if hasattr(call, 'stream_player') and call.stream_player:
-                    is_bot_speaking = call.stream_player.is_playing
-                    
-                if is_bot_speaking:
-                    # Barge-in detection
-                    await self._check_barge_in(call, audio_data)
-                else:
-                    # Process speech
-                    transcription = await self.audio_pipeline.process_audio(audio_data)
-                    
-                    if transcription and len(transcription.strip()) >= 2:
-                        await self._handle_user_input(call, transcription)
-                        
-            except asyncio.CancelledError:
-                break
+                # Cancel any existing audio loop
+                if self._audio_loop_task and not self._audio_loop_task.done():
+                    self._audio_loop_task.cancel()
+                    try:
+                        await self._audio_loop_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                remote_uri = getattr(call_info, 'remote_uri', 'unknown')
+                logger.info(f"Call received from: {remote_uri}")
+                
+                self.current_call = call_info
+                self.conversation_history = []
+                self._processing = False
+                
+                # Play greeting
+                await self._play_greeting()
+                
+                # Start listening (single task)
+                logger.info("Listening...")
+                self._audio_loop_task = asyncio.create_task(self._audio_processing_loop())
             except Exception as e:
-                logger.error(f"Error: {e}")
-                import traceback
-                traceback.print_exc()
-                
-        # Cleanup
-        if hasattr(call, 'stream_player') and call.stream_player:
-            call.stream_player.stop_all()
-        self.current_call = None
+                logger.error(f"Error handling call: {e}", exc_info=True)
         
-    async def _check_barge_in(self, call, audio_data: bytes):
-        """Fast barge-in detection."""
-        samples = np.frombuffer(audio_data, dtype=np.int16)
-        energy = np.sqrt(np.mean(samples.astype(np.float32)**2)) if len(samples) > 0 else 0
+    async def _play_greeting(self):
+        """Play initial greeting."""
+        greeting = "Hello! How can I help you today?"
         
-        if energy > self.config.barge_in_energy_threshold:
-            if self.audio_pipeline.has_speech(audio_data):
-                self._barge_in_counter += len(audio_data)
-                barge_ms = (self._barge_in_counter / (self.config.sample_rate * 2)) * 1000
-                
-                # Reduced threshold for faster interruption
-                if barge_ms >= 400:  # 400ms instead of 700ms
-                    logger.info(f"Barge-in! Energy={energy:.0f}")
-                    call.stream_player.stop_all()
-                    self._barge_in_counter = 0
+        try:
+            logger.info(f"Synthesizing greeting: {greeting}")
+            audio = await asyncio.wait_for(
+                self.audio_pipeline.synthesize(greeting),
+                timeout=10.0
+            )
+            if audio:
+                logger.info(f"Got audio: {len(audio)} bytes")
+                await self._play_audio(audio)
             else:
-                self._barge_in_counter = 0
-        else:
-            self._barge_in_counter = 0
+                logger.warning("TTS returned no audio for greeting")
+        except asyncio.TimeoutError:
+            logger.warning("Greeting TTS timed out")
+        except Exception as e:
+            logger.error(f"Greeting error: {e}", exc_info=True)
             
-    async def _handle_user_input(self, call, transcription: str):
-        """
-        Handle user input with parallel LLM + TTS streaming.
-        """
-        response_start = time.time()
-        logger.info(f"User: {transcription}")
+    async def _audio_processing_loop(self):
+        """Main audio processing loop."""
+        logger.info("Audio processing loop started")
         
-        # Immediate acknowledgment (use cached audio for instant playback)
-        ack = random.choice(self.acknowledgments)
-        cached_ack = self.audio_pipeline.get_cached_audio(ack)
+        # Wait for media to be ready
+        await asyncio.sleep(0.5)
         
-        if cached_ack:
-            # Instant playback from cache
-            await self._play_audio_chunk(call, cached_ack)
-            logger.debug(f"Played cached ack: {ack}")
+        last_position = 0
+        
+        while self.running and self.current_call and getattr(self.current_call, 'is_active', False):
+            try:
+                # Check if we have a recording file
+                record_file = getattr(self.current_call, 'record_file', None)
+                
+                if record_file and os.path.exists(record_file):
+                    try:
+                        # Read new audio from recording
+                        with open(record_file, 'rb') as f:
+                            f.seek(0, 2)  # End of file
+                            current_size = f.tell()
+                            
+                            if current_size > last_position + 3200:  # At least 100ms of audio
+                                f.seek(last_position)
+                                audio_chunk = f.read(current_size - last_position)
+                                last_position = current_size
+                                
+                                # Skip WAV header on first read
+                                if last_position < 100:
+                                    audio_chunk = audio_chunk[44:] if len(audio_chunk) > 44 else audio_chunk
+                                    
+                                if audio_chunk:
+                                    # Check for barge-in
+                                    if self._processing and self.audio_pipeline.has_speech(audio_chunk):
+                                        logger.info("Barge-in detected")
+                                        await self._handle_barge_in()
+                                        
+                                    # Process through VAD/STT
+                                    transcription = await self.audio_pipeline.process_audio(audio_chunk)
+                                    
+                                    if transcription:
+                                        await self._handle_transcription(transcription)
+                                        
+                    except Exception as e:
+                        logger.debug(f"Audio read error: {e}")
+                        
+                await asyncio.sleep(0.05)  # 50ms polling interval
+                    
+            except Exception as e:
+                logger.error(f"Audio processing error: {e}")
+                await asyncio.sleep(0.1)
+                
+        logger.info("Audio processing loop ended")
+                
+    async def _handle_transcription(self, text: str):
+        """Handle transcribed text."""
+        text = text.strip()
+        if not text or len(text) < 2:
+            return
+        
+        # Prevent overlapping processing
+        if self._processing:
+            logger.debug(f"Already processing, queuing: {text}")
+            return
+            
+        logger.info(f"User: {text}")
         
         # Add to history
         self.conversation_history.append({
             "role": "user",
-            "content": transcription
+            "content": text
         })
         
-        # Check for hangup
-        if self._should_hangup(transcription):
-            goodbye_audio = self.audio_pipeline.get_cached_audio("goodbye")
-            if goodbye_audio:
-                await self._play_audio_chunk(call, goodbye_audio)
-            else:
-                await self._play_response(call, "Goodbye!")
-            await asyncio.sleep(1.0)
-            await self.sip_handler.hangup_call(call)
-            return
-            
-        # Generate and stream response in parallel
-        full_response = await self._generate_and_stream_response(
-            call,
-            {
-                "remote_uri": call.remote_uri,
-                "duration": call.duration
-            }
-        )
+        # Generate response
+        self._processing = True
         
-        total_time = (time.time() - response_start) * 1000
-        logger.info(f"Total response time: {total_time:.0f}ms")
-        
-        if full_response:
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": full_response
-            })
-            
-    async def _generate_and_stream_response(self, call, call_context: dict) -> str:
-        """
-        Generate LLM response and stream TTS in parallel.
-        
-        Key optimization: Start TTS on first complete sentence while
-        LLM is still generating rest of response.
-        """
-        full_response = ""
-        sentence_buffer = ""
-        first_audio = True
-        metrics = LatencyMetrics()
-        metrics.stt_end = time.time()
-        
-        # Stream from LLM
-        async for token in self._stream_llm_tokens(call_context):
-            if metrics.llm_first_token == 0:
-                metrics.llm_first_token = time.time()
-                ttft = (metrics.llm_first_token - metrics.stt_end) * 1000
-                logger.debug(f"LLM TTFT: {ttft:.0f}ms")
-                
-            full_response += token
-            sentence_buffer += token
-            
-            # Check for sentence boundary
-            if self._is_sentence_complete(sentence_buffer):
-                sentence = sentence_buffer.strip()
-                sentence_buffer = ""
-                
-                if sentence:
-                    # Stream this sentence to TTS immediately
-                    async for audio_chunk in self.audio_pipeline.synthesize_stream(sentence):
-                        if first_audio:
-                            metrics.tts_first_chunk = time.time()
-                            tts_latency = (metrics.tts_first_chunk - metrics.llm_first_token) * 1000
-                            logger.debug(f"TTS first chunk: {tts_latency:.0f}ms")
-                            first_audio = False
-                            
-                        await self._play_audio_chunk(call, audio_chunk)
-                        
-        # Handle remaining text
-        if sentence_buffer.strip():
-            async for audio_chunk in self.audio_pipeline.synthesize_stream(sentence_buffer.strip()):
-                await self._play_audio_chunk(call, audio_chunk)
-                
-        metrics.llm_complete = time.time()
-        
-        # Log metrics
-        if metrics.speech_end == 0:
-            metrics.speech_end = metrics.stt_end
-        total = (metrics.tts_first_chunk - metrics.stt_end) * 1000 if metrics.tts_first_chunk else 0
-        logger.info(f"Response latency: {total:.0f}ms (STT done → first audio)")
-        
-        return full_response
-        
-    async def _stream_llm_tokens(self, call_context: dict):
-        """Stream tokens from LLM."""
-        messages = [
-            {"role": "system", "content": self.llm_engine._build_system_prompt(call_context)}
-        ]
-        messages.extend(self.conversation_history[-self.config.max_conversation_turns * 2:])
-        
-        if not self.llm_engine.client:
-            # Mock for testing
-            for word in "I understand. How can I help?".split():
-                yield word + " "
-                await asyncio.sleep(0.02)
-            return
-            
         try:
-            stream = await self.llm_engine.client.chat.completions.create(
-                model=self.config.llm_model,
-                messages=messages,
-                max_tokens=self.config.llm_max_tokens,
-                temperature=self.config.llm_temperature,
-                stream=True
-            )
+            response = await self._generate_response(text)
             
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    yield delta.content
-                    
+            if response:
+                logger.info(f"Assistant: {response}")
+                
+                # Add to history
+                self.conversation_history.append({
+                    "role": "assistant", 
+                    "content": response
+                })
+                
+                # Synthesize and play
+                await self._speak(response)
+                
+        except Exception as e:
+            logger.error(f"Response error: {e}")
+            await self._speak("Sorry, I had trouble with that.")
+            
+        finally:
+            self._processing = False
+            
+    async def _generate_response(self, user_input: str) -> str:
+        """Generate LLM response."""
+        try:
+            caller_id = getattr(self.current_call, 'remote_uri', 'unknown') if self.current_call else 'unknown'
+            response = await self.llm_engine.generate_response(
+                self.conversation_history,
+                {"caller_id": caller_id}
+            )
+            return response
         except Exception as e:
             logger.error(f"LLM error: {e}")
-            yield "Sorry, I had trouble with that."
+            return "I'm sorry, could you repeat that?"
             
-    def _is_sentence_complete(self, text: str) -> bool:
-        """Check if text ends with complete sentence."""
-        text = text.strip()
-        if not text:
-            return False
+    async def _speak(self, text: str):
+        """Synthesize and play text."""
+        try:
+            # Check cache first
+            cached = self.audio_pipeline.get_cached_audio(text)
+            if cached:
+                await self._play_audio(cached)
+                return
+                
+            # Synthesize
+            start = time.time()
+            audio = await self.audio_pipeline.synthesize(text)
+            elapsed = (time.time() - start) * 1000
             
-        if text[-1] in '.!?':
-            # Avoid abbreviation false positives
-            lower = text.lower()
-            for abbrev in ['dr.', 'mr.', 'mrs.', 'ms.', 'jr.', 'sr.', 'etc.', 'e.g.', 'i.e.']:
-                if lower.endswith(abbrev):
-                    return False
-            return True
-        return False
-        
-    async def _play_response(self, call, text: str):
-        """Play synthesized response."""
-        async for chunk in self.audio_pipeline.synthesize_stream(text):
-            await self._play_audio_chunk(call, chunk)
+            if audio:
+                logger.info(f"TTS: {elapsed:.0f}ms for {len(text)} chars")
+                await self._play_audio(audio)
+            else:
+                logger.warning("TTS returned no audio")
+                
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
             
-    async def _play_audio_chunk(self, call, audio_chunk: bytes):
-        """Play audio chunk to call."""
-        if not hasattr(call, 'stream_player') or not call.stream_player:
-            return
+    async def _play_audio(self, audio: bytes):
+        """Play audio to caller."""
+        try:
+            if self.current_call:
+                await self.sip_handler.send_audio(self.current_call, audio)
+        except Exception as e:
+            logger.error(f"Playback error: {e}")
             
-        if not call.is_active:
-            return
-            
-        import tempfile
-        import os
-        import wave
-        
-        # Write to temp file
-        fd, path = tempfile.mkstemp(suffix='.wav', prefix='chunk_')
-        os.close(fd)
-        
-        with wave.open(path, 'wb') as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(self.config.sample_rate)
-            wav.writeframes(audio_chunk)
-            
-        call.stream_player.enqueue_file(path)
-        
-    def _should_hangup(self, text: str) -> bool:
-        """Check for hangup phrases."""
-        phrases = ["goodbye", "bye", "hang up", "end call", "that's all"]
-        lower = text.lower()
-        return any(p in lower for p in phrases)
-        
-    # Tool methods
-    async def schedule_callback(self, delay: int, message: str, destination: str = None):
-        """Schedule callback."""
-        target = destination
-        if not target and self.current_call:
-            target = self.current_call.remote_uri
-        if not target:
-            return
-            
-        target = target.replace("-", "").replace(" ", "")
-        if "sip:" not in target:
-            target = f"sip:{target}@{self.config.sip_domain}"
-            
-        await self.tool_manager.schedule_callback(delay, message, target)
+    async def _handle_barge_in(self):
+        """Handle user interruption."""
+        logger.info("Stopping playback for barge-in")
+        # Stop playback via playlist player
+        if self.current_call:
+            player = self.sip_handler.get_playlist_player(self.current_call)
+            if player:
+                player.stop_all()
+        self._processing = False
         
     async def make_outbound_call(self, uri: str, message: str):
-        """Make outbound call."""
-        call = await self.sip_handler.make_call(uri)
-        if not call:
+        """Make an outbound call and play a message."""
+        # Format URI if it's just an extension/number
+        if not uri.startswith('sip:'):
+            # Strip any existing sip: prefix or angle brackets
+            clean_uri = uri.replace('<', '').replace('>', '').replace('sip:', '')
+            # If it doesn't have an @, add the domain
+            if '@' not in clean_uri:
+                uri = f"sip:{clean_uri}@{self.config.sip_domain}"
+            else:
+                uri = f"sip:{clean_uri}"
+                
+        logger.info(f"Making outbound call to {uri}")
+        try:
+            call_info = await self.sip_handler.make_call(uri)
+            if call_info:
+                # Wait for call to connect (configurable ring timeout)
+                ring_timeout = self.config.callback_ring_timeout_s
+                start_time = asyncio.get_event_loop().time()
+                
+                # Poll for call to be answered
+                while asyncio.get_event_loop().time() - start_time < ring_timeout:
+                    if getattr(call_info, 'is_active', False):
+                        break
+                    await asyncio.sleep(0.5)
+                else:
+                    # Timed out waiting for answer
+                    logger.warning(f"Call to {uri} not answered within {ring_timeout}s")
+                    await self.sip_handler.hangup_call(call_info)
+                    return
+                
+                # Small delay after answer for audio to stabilize
+                await asyncio.sleep(1)
+                
+                # Play message
+                audio = await self.audio_pipeline.synthesize(message)
+                if audio:
+                    await self.sip_handler.send_audio(call_info, audio)
+                    # Wait for audio to play (estimate based on audio length)
+                    audio_duration = len(audio) / (self.config.sample_rate * 2)
+                    await asyncio.sleep(audio_duration + 1)
+                    
+                # Hang up
+                await self.sip_handler.hangup_call(call_info)
+                logger.info(f"Outbound call to {uri} completed")
+            else:
+                logger.error(f"Failed to connect outbound call to {uri}")
+        except Exception as e:
+            logger.error(f"Outbound call failed: {e}")
+            raise
+        
+    async def schedule_callback(self, delay: int, message: str = "This is your scheduled callback.", destination: str = None):
+        """Schedule a callback to the caller."""
+        if destination == "CALLER_NUMBER" or destination is None:
+            # Get caller's number from current call
+            if self.current_call:
+                destination = getattr(self.current_call, 'remote_uri', None)
+                
+        if not destination:
+            logger.warning("No destination for callback")
             return
             
-        # Wait for answer
-        for _ in range(60):
-            if call.is_active:
-                break
-            if call.call_id not in self.sip_handler.active_calls:
-                return
-            await asyncio.sleep(0.5)
-            
-        if call.is_active:
-            self.current_call = call
-            self.conversation_history = []
-            
-            if PJSUA_AVAILABLE and call.pj_call and call.pj_call.aud_med:
-                call.stream_player = self.sip_handler.get_playlist_player(call)
-                
-            await asyncio.sleep(0.5)
-            self.audio_pipeline.vad.reset()
-            self.audio_pipeline.audio_buffer.clear()
-            
-            await self._play_response(call, message)
-            await self._fast_conversation_loop(call)
-        else:
-            await self.sip_handler.hangup_call(call)
+        logger.info(f"Scheduling callback in {delay}s to {destination}: {message}")
+        
+        # Use tool_manager's scheduler for proper task management
+        await self.tool_manager.schedule_task(
+            task_type="callback",
+            delay_seconds=delay,
+            message=message,
+            target_uri=destination
+        )
 
 
 async def main():
-    """Entry point."""
-    config = Config()
-    assistant = LowLatencySIPAssistant(config)
+    """Main entry point."""
+    config = get_config()
     
+    # Set log level
+    logging.getLogger().setLevel(getattr(logging, config.log_level.upper()))
+    
+    assistant = SIPAIAssistant(config)
+    
+    # Handle shutdown
     loop = asyncio.get_event_loop()
     
-    def signal_handler():
+    def shutdown_handler():
+        logger.info("Shutdown signal received")
         asyncio.create_task(assistant.stop())
         
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, signal_handler)
+        loop.add_signal_handler(sig, shutdown_handler)
         
     try:
         await assistant.start()
-    except KeyboardInterrupt:
-        pass
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise
     finally:
         await assistant.stop()
 

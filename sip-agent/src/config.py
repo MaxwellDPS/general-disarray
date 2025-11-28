@@ -1,14 +1,10 @@
 """
-Low-Latency Configuration
-=========================
-Optimized settings for minimum response latency.
-
-Changes from standard config:
-- Shorter silence timeout (500ms vs 1000ms)
-- More aggressive VAD
-- Reduced barge-in threshold
-- Smaller Whisper beam size
-- Lower XTTS temperature/top_k for faster sampling
+Low-Latency Configuration with Piper TTS
+=========================================
+All ML inference offloaded to dedicated API services:
+- Whisper API for STT
+- Piper for TTS (fast, local)
+- vLLM for LLM
 """
 
 import os
@@ -33,33 +29,32 @@ class Config:
     audio_codecs: list = field(default_factory=lambda: ["PCMU", "PCMA", "opus"])
     
     # ===================
-    # Audio Configuration (Optimized)
+    # Audio Configuration
     # ===================
-    sample_rate: int = 16000
+    sample_rate: int = 16000  # Target rate for SIP/Whisper
     channels: int = 1
-    chunk_duration_ms: int = 20  # Reduced from 30ms for faster processing
+    chunk_duration_ms: int = 20
     
-    # Voice Activity Detection (Aggressive)
-    vad_aggressiveness: int = 3  # Maximum (was 0) - faster speech detection
+    # Voice Activity Detection
+    vad_aggressiveness: int = 3
     
-    # Barge-in (More sensitive)
-    barge_in_min_duration_ms: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_MIN_DURATION", "400")))  # Reduced from 700
-    barge_in_energy_threshold: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_ENERGY_THRESHOLD", "2000")))  # Reduced from 2500
+    # Barge-in
+    barge_in_min_duration_ms: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_MIN_DURATION", "400")))
+    barge_in_energy_threshold: int = field(default_factory=lambda: int(os.getenv("BARGE_IN_ENERGY_THRESHOLD", "2000")))
     
-    # Speech detection (Faster)
-    speech_pad_ms: int = 200  # Reduced from 300
-    min_speech_duration_ms: int = 200  # Reduced from 250
-    max_speech_duration_s: float = 8.0  # Reduced from 10
-    silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("SILENCE_TIMEOUT_MS", "500")))  # Reduced from 1000
+    # Speech detection
+    speech_pad_ms: int = 200
+    min_speech_duration_ms: int = 200
+    max_speech_duration_s: float = 8.0
+    silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("SILENCE_TIMEOUT_MS", "500")))
     
     # ===================
-    # STT Configuration (Speed optimized)
+    # Whisper API Configuration (STT)
     # ===================
-    # Try faster-whisper first, fall back to standard
-    whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "medium"))  # Medium faster than large
-    whisper_device: str = field(default_factory=lambda: os.getenv("WHISPER_DEVICE", "cuda"))
+    whisper_api_url: str = field(default_factory=lambda: os.getenv("WHISPER_API_URL", "http://localhost:8001"))
+    whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-small.en"))
     whisper_language: str = field(default_factory=lambda: os.getenv("WHISPER_LANGUAGE", "en"))
-    whisper_beam_size: int = field(default_factory=lambda: int(os.getenv("WHISPER_BEAM_SIZE", "3")))  # Reduced from 5
+    whisper_response_format: str = "json"
     
     # ===================
     # LLM Configuration
@@ -69,29 +64,19 @@ class Config:
     llm_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", "http://localhost:8000/v1"))
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", "not-needed"))
     
-    # Generation (Faster)
-    llm_max_tokens: int = 150  # Reduced from 2000 - keep responses short for voice
-    llm_temperature: float = 0.6  # Lower for more predictable/faster responses
+    # Generation
+    llm_max_tokens: int = 512
+    llm_temperature: float = 0.6
     llm_top_p: float = 0.85
     
-    max_conversation_turns: int = 10  # Reduced from 20 for less context
+    max_conversation_turns: int = 10
     
     # ===================
-    # TTS Configuration (Speed optimized)
+    # Piper TTS Configuration
     # ===================
-    xtts_api_url: str = field(default_factory=lambda: os.getenv("XTTS_API_URL", "http://localhost:8001"))
-    xtts_default_voice: str = field(default_factory=lambda: os.getenv("XTTS_DEFAULT_VOICE", "tts_models/multilingual/multi-dataset/xtts_v2"))
-    
-    # Lower values = faster synthesis
-    xtts_temperature: float = field(default_factory=lambda: float(os.getenv("XTTS_TEMPERATURE", "0.65")))
-    xtts_top_k: int = field(default_factory=lambda: int(os.getenv("XTTS_TOP_K", "30")))
-    xtts_top_p: float = field(default_factory=lambda: float(os.getenv("XTTS_TOP_P", "0.8")))
-    xtts_repetition_penalty: float = field(default_factory=lambda: float(os.getenv("XTTS_REPETITION_PENALTY", "2.0")))
-    
-    # ===================
-    # Voice Cloning
-    # ===================
-    voices_dir: Path = field(default_factory=lambda: Path(os.getenv("VOICES_DIR", "./data/voices")))
+    piper_host: str = field(default_factory=lambda: os.getenv("PIPER_HOST", "localhost"))
+    piper_port: int = field(default_factory=lambda: int(os.getenv("PIPER_PORT", "10200")))
+    piper_voice: str = field(default_factory=lambda: os.getenv("PIPER_VOICE", "en_US-lessac-medium"))
     
     # ===================
     # Tools
@@ -103,13 +88,13 @@ class Config:
     max_timer_duration_hours: int = 24
     callback_retry_attempts: int = 3
     callback_retry_delay_s: int = 60
+    callback_ring_timeout_s: int = field(default_factory=lambda: int(os.getenv("CALLBACK_RING_TIMEOUT", "30")))
     
     # ===================
     # System
     # ===================
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "./data")))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
-    max_gpu_memory_gb: float = 90.0
     
     def __post_init__(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -118,7 +103,7 @@ class Config:
         
     @property
     def system_prompt(self) -> str:
-        """Optimized system prompt - shorter for faster processing."""
+        """Optimized system prompt."""
         return """You are a voice assistant on a phone call.
 
 RULES:

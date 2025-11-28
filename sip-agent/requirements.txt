@@ -1,9 +1,11 @@
-# SIP AI Assistant Dependencies
-# ==============================
-# Updated for XTTS API and standard Whisper
-
-# Core async framework
-asyncio-mqtt
+# SIP AI Assistant Dependencies (Lightweight)
+# ============================================
+# All ML inference is offloaded to API services:
+# - Whisper API for STT
+# - Piper TTS via Wyoming protocol
+# - vLLM for LLM
+#
+# This container only handles audio processing and API orchestration.
 
 # Audio processing
 numpy>=1.24.0
@@ -11,53 +13,30 @@ scipy>=1.10.0
 webrtcvad>=2.0.10
 soundfile>=0.12.0
 
-# Speech-to-Text
-# Using standard OpenAI Whisper (not faster-whisper)
-# faster-whisper has compatibility issues with GB10/Grace Blackwell
-openai-whisper>=20231117
-
-faster-whisper
-
-
-# LLM client (OpenAI-compatible API)
-openai>=1.12.0
+# HTTP clients for API communication
 httpx>=0.25.0
-
-# XTTS API client (TTS runs as separate service)
-# The actual TTS library is in the XTTS container
 aiohttp>=3.9.0
+aiofiles>=23.0.0
+
+# OpenAI-compatible client for LLM
+openai>=1.12.0
+
+# Wyoming protocol for Piper TTS
+wyoming>=1.5.0
 
 # Async utilities
-aiofiles>=23.0.0
 aiocache>=0.12.0
 
-# Scheduling
+# Scheduling (for timers/callbacks)
 APScheduler>=3.10.0
 
 # Configuration
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 
-# Logging and monitoring
+# Logging
 structlog>=23.0.0
-prometheus-client>=0.18.0
 
-# Development
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-
-# Optional: Asterisk ARI support
-# ari-py>=0.1.3
-
-# Optional: Database for persistence
-# aiosqlite>=0.19.0
-# sqlalchemy[asyncio]>=2.0.0
-
-fastapi
-uvicorn[standard]
-httpx
-python-multipart
-pydantic
-numpy
-scipy
+# HTTP server for health checks (optional)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0

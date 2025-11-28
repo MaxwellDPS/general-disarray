@@ -206,10 +206,12 @@ class LLMEngine:
         """Parse and execute tool calls from response."""
         tool_results = []
         
-        # Find tool calls in format: [TOOL:name:param1=val1,param2=val2]
-        pattern = r'\[TOOL:(\w+):([^\]]+)\]'
-        matches = list(re.finditer(pattern, response))
+        # Find tool calls in format: [TOOL:name:param1=val1,param2=val2] or [TOOL:name]
+        pattern_with_params = r'\[TOOL:(\w+):([^\]]+)\]'
+        pattern_no_params = r'\[TOOL:(\w+)\]'
         
+        # Process tools with parameters
+        matches = list(re.finditer(pattern_with_params, response))
         for match in matches:
             tool_name = match.group(1)
             params_str = match.group(2)
@@ -219,7 +221,6 @@ class LLMEngine:
             for param in params_str.split(','):
                 if '=' in param:
                     key, value = param.split('=', 1)
-                    # Try to convert to appropriate type
                     value = self._parse_param_value(value)
                     params[key.strip()] = value
                     
@@ -229,7 +230,6 @@ class LLMEngine:
                 raw=match.group(0)
             )
             
-            # Execute tool
             try:
                 result = await self.tool_manager.execute_tool(tool_call)
                 tool_results.append({
@@ -244,9 +244,39 @@ class LLMEngine:
                     "params": params,
                     "error": str(e)
                 })
+        
+        # Process tools without parameters (e.g., HANGUP)
+        # Remove already-matched sections first to avoid double-matching
+        temp_response = re.sub(pattern_with_params, '', response)
+        matches_no_params = list(re.finditer(pattern_no_params, temp_response))
+        
+        for match in matches_no_params:
+            tool_name = match.group(1)
+            
+            tool_call = ToolCall(
+                name=tool_name,
+                params={},
+                raw=match.group(0)
+            )
+            
+            try:
+                result = await self.tool_manager.execute_tool(tool_call)
+                tool_results.append({
+                    "tool": tool_name,
+                    "params": {},
+                    "result": result
+                })
+            except Exception as e:
+                logger.error(f"Tool execution error: {e}")
+                tool_results.append({
+                    "tool": tool_name,
+                    "params": {},
+                    "error": str(e)
+                })
                 
-        # Remove tool calls from response text
-        clean_response = re.sub(pattern, '', response).strip()
+        # Remove all tool calls from response text
+        clean_response = re.sub(pattern_with_params, '', response)
+        clean_response = re.sub(pattern_no_params, '', clean_response).strip()
         
         return clean_response, tool_results
         
