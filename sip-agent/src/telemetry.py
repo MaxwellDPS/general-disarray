@@ -48,14 +48,16 @@ def init_telemetry(service_name: str = "sip-agent") -> bool:
     
     try:
         from opentelemetry import trace, metrics
+        from opentelemetry._logs import set_logger_provider
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource, SERVICE_NAME
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         from opentelemetry.instrumentation.redis import RedisInstrumentor
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -90,6 +92,34 @@ def init_telemetry(service_name: str = "sip-agent") -> bool:
         metrics.set_meter_provider(meter_provider)
         _meter = metrics.get_meter(__name__)
         
+        # Initialize Logger Provider for OTLP log export
+        try:
+            # Try different import paths for OTLPLogExporter (varies by version)
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+            except ImportError:
+                try:
+                    from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter
+                except ImportError:
+                    raise ImportError("OTLPLogExporter not available in this opentelemetry version")
+            
+            log_exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
+            logger_provider = LoggerProvider(resource=resource)
+            logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+            set_logger_provider(logger_provider)
+            
+            # Attach OTEL handler to root logger to capture all logs
+            otel_handler = LoggingHandler(
+                level=logging.DEBUG,
+                logger_provider=logger_provider
+            )
+            logging.getLogger().addHandler(otel_handler)
+            logger.info("OTLP log export configured")
+        except ImportError as e:
+            logger.warning(f"OTLP log export not available: {e}")
+        except Exception as e:
+            logger.warning(f"OTLP log export setup failed: {e}")
+        
         # Auto-instrument libraries
         try:
             HTTPXClientInstrumentor().instrument()
@@ -105,7 +135,7 @@ def init_telemetry(service_name: str = "sip-agent") -> bool:
             
         try:
             LoggingInstrumentor().instrument(set_logging_format=True)
-            logger.info("Instrumented logging")
+            logger.info("Instrumented logging with trace context")
         except Exception as e:
             logger.debug(f"Logging instrumentation skipped: {e}")
         

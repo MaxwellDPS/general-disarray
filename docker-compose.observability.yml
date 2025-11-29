@@ -18,7 +18,7 @@ services:
   # OpenTelemetry Collector
   # ===================
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.115.0
+    image: otel/opentelemetry-collector-contrib:0.140.0
     container_name: otel-collector
     command: ["--config=/etc/otel-collector/config.yaml"]
     volumes:
@@ -27,16 +27,17 @@ services:
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
       - "8888:8888"   # Prometheus metrics exposed by the collector
+      - "13133:13133" # Health check endpoint
     depends_on:
       - tempo
       - loki
       - prometheus
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:13133/"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 3
 
   # ===================
   # Prometheus - Metrics
@@ -90,7 +91,13 @@ services:
   loki:
     image: grafana/loki:3.2.1
     container_name: loki
-    command: ["-config.file=/etc/loki/loki.yaml"]
+    user: "0"  # Run as root to avoid volume permission issues
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /var/loki/rules /var/loki/chunks
+        exec /usr/bin/loki -config.file=/etc/loki/loki.yaml
     volumes:
       - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
       - loki-data:/var/loki
@@ -130,7 +137,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
+  
   # ===================
   # Redis Exporter - Redis Metrics
   # ===================
@@ -144,6 +151,31 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
+
+  # ===================
+  # nvitop Exporter - GPU Metrics
+  # ===================
+  nvitop-exporter:
+    image:  ghcr.io/xuehaipan/nvitop-exporter:latest
+    container_name: nvitop-exporter
+    command: ["--port", "5050", "--bind-address", "0.0.0.0"]
+    ports:
+      - "5050:5050"
+    pid: "host"  # Required to see GPU processes
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:5050/metrics"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 10s
 
   # ===================
   # Override sip-agent with OTEL instrumentation
@@ -160,9 +192,9 @@ services:
       - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
       # Enable OTEL in our app
       - OTEL_ENABLED=true
-    depends_on:
-      otel-collector:
-        condition: service_healthy
+    # depends_on:
+    #   otel-collector:
+    #     condition: service_healthy
 
   # ===================
   # Override vLLM with OTEL tracing
@@ -182,9 +214,9 @@ services:
       - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.90}
       - --max-model-len=${MAX_MODEL_LEN:-8192}
       - --otlp-traces-endpoint=http://otel-collector:4317
-    depends_on:
-      otel-collector:
-        condition: service_healthy
+    # depends_on:
+    #   otel-collector:
+    #     condition: service_healthy
 
   # ===================
   # Override Speaches with OTEL instrumentation
@@ -198,9 +230,9 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=otlp
       - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
-    depends_on:
-      otel-collector:
-        condition: service_healthy
+    # depends_on:
+    #   otel-collector:
+    #     condition: service_healthy
 
 volumes:
   prometheus-data:

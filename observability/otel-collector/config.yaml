@@ -36,6 +36,15 @@ connectors:
     exemplars:
       enabled: true
 
+  # Service graph for node graph visualization
+  servicegraph:
+    latency_histogram_buckets: [100ms, 250ms, 500ms, 1s, 5s, 10s]
+    dimensions:
+      - service.namespace
+    store:
+      ttl: 2s
+      max_items: 1000
+
 exporters:
   # Traces to Tempo
   otlp/tempo:
@@ -49,36 +58,47 @@ exporters:
     tls:
       insecure: true
 
-  # Logs to Loki
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
-    default_labels_enabled:
-      exporter: true
-      job: true
+  # Logs to Loki via OTLP HTTP
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
 
   # Debug output (optional)
   debug:
     verbosity: basic
 
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 service:
+  extensions: [health_check]
+  
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/tempo, spanmetrics]
+      exporters: [otlp/tempo, spanmetrics, servicegraph]
     
     metrics:
-      receivers: [otlp, spanmetrics]
+      receivers: [otlp, spanmetrics, servicegraph]
       processors: [memory_limiter, resource, batch]
       exporters: [prometheusremotewrite]
     
     logs:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [loki]
+      exporters: [otlphttp/loki, debug]
 
   telemetry:
     logs:
       level: info
     metrics:
-      address: 0.0.0.0:8888
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: "0.0.0.0"
+                port: 8888

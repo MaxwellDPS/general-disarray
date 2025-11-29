@@ -6,7 +6,7 @@ datasources:
     uid: prometheus
     access: proxy
     url: http://prometheus:9090
-    isDefault: false
+    isDefault: true
     editable: false
     jsonData:
       httpMethod: POST
@@ -34,7 +34,7 @@ datasources:
     uid: tempo
     access: proxy
     url: http://tempo:3200
-    isDefault: true
+    isDefault: false
     editable: false
     jsonData:
       httpMethod: GET

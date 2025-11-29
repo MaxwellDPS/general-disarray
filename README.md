@@ -36,6 +36,7 @@ A voice-based AI assistant that answers phone calls via SIP, powered by local LL
 | **vLLM** | LLM inference | Qwen2.5-7B-Instruct (configurable) |
 | **Speaches** | Speech-to-Text | Whisper (configurable size) |
 | **Speaches** | Text-to-Speech | Kokoro-82M with af_heart voice |
+| **Redis** | Call queue | Persistence for outbound calls |
 | **SIP Agent** | Orchestration | PJSIP + Python asyncio |
 
 ## Features
@@ -46,9 +47,143 @@ A voice-based AI assistant that answers phone calls via SIP, powered by local LL
 - **Timers** - "Set a timer for 5 minutes"
 - **Callbacks** - "Call me back in 10 minutes"
 - **Outbound Call API** - REST API for notification calls with response collection
+- **Call Queue** - Redis-backed queue for rate-limiting outbound calls
 - **Extensible Tools** - Easy to add new capabilities
 - **JSON Structured Logging** - Filterable event stream
 - **Pre-cached Phrases** - Low-latency greetings and acknowledgments
+- **OpenTelemetry Observability** - Distributed tracing, metrics, and logs
+
+## Observability Stack (Optional)
+
+The project includes an optional observability stack with OpenTelemetry, Grafana, Prometheus, Tempo, and Loki.
+
+### Quick Start with Observability
+
+```bash
+# Start with observability enabled
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+```
+
+### Access Points
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| Grafana | http://localhost:3000 | Dashboards & visualization |
+| Prometheus | http://localhost:9090 | Metrics queries |
+| Tempo | http://localhost:3200 | Trace queries |
+| Loki | http://localhost:3100 | Log queries |
+| nvitop-exporter | http://localhost:5050/metrics | GPU metrics |
+
+### Components
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                          Observability Stack                                │
+├────────────────┬──────────────┬──────────────┬──────────────┬──────────────┤
+│                │              │              │              │              │
+│   SIP Agent    │    vLLM      │  Speaches    │    Redis     │  (Apps)      │
+│   (traces,     │   (traces,   │   (traces)   │   (metrics)  │              │
+│    metrics,    │    metrics)  │              │              │              │
+│    logs)       │              │              │              │              │
+│                │              │              │              │              │
+└───────┬────────┴──────┬───────┴──────┬───────┴──────┬───────┴──────────────┘
+        │               │              │              │
+        └───────────────┴──────────────┴──────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │  OpenTelemetry       │
+                    │  Collector           │
+                    │  (4317/4318)         │
+                    └──────────────────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+    ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+    │  Prometheus  │   │    Tempo     │   │    Loki      │
+    │  (metrics)   │   │   (traces)   │   │   (logs)     │
+    └──────────────┘   └──────────────┘   └──────────────┘
+            │                  │                  │
+            └──────────────────┼──────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │      Grafana         │
+                    │   (visualization)    │
+                    │     :3000            │
+                    └──────────────────────┘
+```
+
+### Pre-built Dashboards
+
+| Dashboard | Description |
+|-----------|-------------|
+| **SIP Agent Overview** | Call metrics, STT/TTS/LLM latency, queue depth, service map |
+| **Speaches Overview** | HTTP endpoint metrics, STT/TTS request rates, latency distribution, logs |
+| **GPU Overview (nvitop)** | GPU utilization, memory, temperature, power, fan speed, processes |
+
+> **Tip:** For the full nvitop dashboard with additional graphs, import Grafana dashboard ID `22589`
+
+### Instrumented Metrics
+
+**SIP Agent:**
+- `sip.calls.started` - Calls initiated (counter)
+- `sip.calls.ended` - Calls completed (counter)
+- `sip.calls.duration` - Call duration in ms (histogram)
+- `sip.tts.latency` - TTS synthesis time (histogram)
+- `sip.stt.latency` - STT transcription time (histogram)
+- `sip.llm.latency` - LLM inference time (histogram)
+- `sip.queue.depth` - Outbound call queue size (gauge)
+- `sip.queue.wait_time` - Time waiting in queue (histogram)
+
+**Speaches (via OpenTelemetry auto-instrumentation):**
+- `http_server_request_duration_seconds` - HTTP request latency (histogram)
+- `http_server_active_requests` - Currently active requests (gauge)
+- Per-endpoint metrics for `/v1/audio/transcriptions`, `/v1/audio/speech`, etc.
+
+**vLLM (native):**
+- Request latency, throughput
+- Token generation metrics
+- GPU memory utilization (via Prometheus scrape)
+
+**GPU (via nvitop-exporter):**
+- `nvitop_device_utilization_gpu_percent` - GPU compute utilization
+- `nvitop_device_utilization_memory_percent` - GPU memory utilization  
+- `nvitop_device_memory_used_bytes` / `_total_bytes` - Memory usage
+- `nvitop_device_temperature_gpu_celsius` - GPU temperature
+- `nvitop_device_power_usage_watts` - Power consumption
+- `nvitop_device_fan_speed_percent` - Fan speed
+- `nvitop_process_gpu_memory_bytes` - Per-process GPU memory usage
+
+### Trace Correlation
+
+Traces are automatically correlated across services:
+- HTTP requests between SIP Agent → vLLM/Speaches
+- Redis operations for queue management
+- Call lifecycle from start to hangup
+
+### Log Correlation
+
+JSON logs include trace context for correlation:
+```json
+{
+  "ts": "2024-01-15T10:30:00",
+  "level": "INFO",
+  "trace_id": "abc123...",
+  "span_id": "def456...",
+  "msg": "Processing speech",
+  "event": "stt_started"
+}
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OTEL_ENABLED` | Enable OpenTelemetry | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint | `http://otel-collector:4317` |
+| `OTEL_SERVICE_NAME` | Service name for traces | `sip-agent` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Additional attributes | `` |
 
 ## Prerequisites
 
@@ -116,6 +251,7 @@ SIP_USER=1000                    # SIP extension/username
 SIP_PASSWORD=secret              # SIP password
 SIP_DOMAIN=pbx.example.com       # SIP server domain
 SIP_REGISTRAR=pbx.example.com    # SIP registrar (optional)
+SIP_MAX_CALLS=8                  # Max simultaneous calls (inbound+outbound)
 
 # LLM Configuration
 LLM_MODEL=Qwen/Qwen2.5-7B-Instruct  # HuggingFace model ID
@@ -131,6 +267,10 @@ TTS_VOICE=af_heart                  # Voice preset
 # Audio Settings
 SAMPLE_RATE=16000                   # Audio sample rate
 
+# Call Queue (Redis)
+REDIS_URL=redis://redis:6379/0      # Redis connection
+CALL_QUEUE_MAX_CONCURRENT=1         # Concurrent outbound calls
+
 # Callback Settings
 CALLBACK_RING_TIMEOUT=30            # Seconds to wait for answer
 CALLBACK_RETRY_ATTEMPTS=2           # Retry failed callbacks
@@ -140,6 +280,22 @@ CALLBACK_RETRY_DELAY=30             # Seconds between retries
 TEMPEST_STATION_ID=12345            # Your Tempest station ID
 TEMPEST_API_TOKEN=your-token        # API token from tempestwx.com
 ```
+
+### Call Concurrency
+
+Two settings control call concurrency:
+
+| Setting | Purpose | Default |
+|---------|---------|---------|
+| `SIP_MAX_CALLS` | PJSIP limit for total simultaneous calls | 8 |
+| `CALL_QUEUE_MAX_CONCURRENT` | Outbound call queue concurrency | 1 |
+
+With defaults, the system can:
+- Answer up to 8 incoming calls simultaneously
+- Make 1 outbound call at a time (queued)
+- Handle inbound calls while an outbound call is in progress
+
+To allow parallel outbound calls, increase `CALL_QUEUE_MAX_CONCURRENT`.
 
 ### System Prompt
 
@@ -195,9 +351,29 @@ Full OpenAPI specification available in `openapi.yaml`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
+| GET | `/health` | Health check (includes queue status) |
+| GET | `/queue` | Queue status |
 | POST | `/call` | Initiate outbound call |
 | GET | `/call/{call_id}` | Check call status |
+
+### Call Queue
+
+Outbound calls are queued in Redis and processed sequentially to prevent overwhelming the SIP system. Configure concurrency with `CALL_QUEUE_MAX_CONCURRENT` (default: 1).
+
+```bash
+# Check queue status
+curl http://localhost:8080/queue
+```
+
+Response:
+```json
+{
+  "enabled": true,
+  "queued": 3,
+  "processing": 1,
+  "max_concurrent": 1
+}
+```
 
 ### Basic Notification Call
 
@@ -218,7 +394,8 @@ curl -X POST http://localhost:8080/call \
 {
   "call_id": "out-1234567890-1",
   "status": "queued",
-  "message": "Call initiated"
+  "message": "Call queued at position 3",
+  "queue_position": 3
 }
 ```
 
@@ -368,6 +545,7 @@ sip-agent-speaches/
 ├── requirements.txt      # Python dependencies
 ├── main.py               # Main orchestrator
 ├── api.py                # REST API for outbound calls
+├── call_queue.py         # Redis-backed call queue
 ├── openapi.yaml          # OpenAPI 3.0 specification
 ├── sip_handler.py        # PJSIP call handling
 ├── audio_pipeline.py     # STT/TTS via Speaches API
