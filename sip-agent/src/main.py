@@ -371,6 +371,11 @@ class SIPAIAssistant:
                         transcription = await self.audio_pipeline.process_audio(audio_chunk)
                         
                         if transcription:
+                            # Play acknowledgment so user knows we heard them
+                            ack = self.get_random_thinking()
+                            log_event(logger, logging.INFO, f"Assistant: {ack}",
+                                    event="assistant_ack", text=ack)
+                            await self._speak(ack)
                             await self._handle_transcription(transcription)
                             
                 except Exception as e:
@@ -407,13 +412,7 @@ class SIPAIAssistant:
         # Generate response
         self._processing = True
         
-        try:
-            # Play acknowledgment so user knows we heard them
-            ack = self.get_random_thinking()
-            log_event(logger, logging.INFO, f"Assistant: {ack}",
-                     event="assistant_ack", text=ack)
-            await self._speak(ack)
-            
+        try:            
             response = await self._generate_response(text)
             
             if response:
@@ -652,16 +651,34 @@ async def main():
     # Start API server
     api_port = int(os.environ.get("API_PORT", "8080"))
     api_task = None
+    call_queue = None
     
     try:
         # Start assistant
         await assistant.start_components()
         
+        # Create and connect call queue
+        redis_url = os.environ.get("REDIS_URL")
+        max_concurrent = int(os.environ.get("CALL_QUEUE_MAX_CONCURRENT", "1"))
+        
+        if redis_url:
+            from call_queue import CallQueue
+            call_queue = CallQueue(redis_url=redis_url, max_concurrent=max_concurrent)
+            await call_queue.connect()
+            log_event(logger, logging.INFO, f"Call queue connected (max_concurrent={max_concurrent})",
+                     event="queue_connected", max_concurrent=max_concurrent)
+        else:
+            logger.warning("REDIS_URL not set - call queue disabled, calls will execute directly")
+        
         # Create and start API
         from api import create_api
         import uvicorn
         
-        app = create_api(assistant)
+        app = create_api(assistant, call_queue)
+        
+        # Start queue worker (uses handler from app.state)
+        if call_queue:
+            await call_queue.start(app.state.handler)
         
         uvicorn_config = uvicorn.Config(
             app, 
@@ -685,12 +702,19 @@ async def main():
         logger.error(f"Fatal error: {e}")
         raise
     finally:
+        # Stop queue
+        if call_queue:
+            await call_queue.stop()
+            await call_queue.disconnect()
+        
+        # Stop API
         if api_task:
             api_task.cancel()
             try:
                 await api_task
             except asyncio.CancelledError:
                 pass
+        
         await assistant.stop()
 
 

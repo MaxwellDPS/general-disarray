@@ -35,6 +35,8 @@ EVENT_STYLE = {
     'warming_up': ('🔥', C.YELLOW, 'system'),
     'ready': ('✅', C.GREEN, 'system'),
     'api_started': ('🌐', C.GREEN, 'system'),
+    'queue_started': ('📋', C.GREEN, 'system'),
+    'queue_connected': ('📋', C.GREEN, 'system'),
     
     # Call lifecycle
     'call_start': ('📞', C.GREEN, 'call'),
@@ -52,6 +54,11 @@ EVENT_STYLE = {
     'outbound_call_choice_no_match': ('❓', C.YELLOW, 'call'),
     'outbound_call_webhook': ('🔗', C.BLUE, 'call'),
     'outbound_call_webhook_success': ('✅', C.GREEN, 'call'),
+    
+    # Call queue
+    'call_queued': ('📥', C.BLUE, 'call'),
+    'call_waited': ('⏳', C.YELLOW, 'call'),
+    'call_processing': ('⚙️', C.YELLOW, 'call'),
     
     # Speech/conversation
     'user_speech': ('🎤', C.CYAN, 'speech'),
@@ -225,7 +232,7 @@ def format_log(line: str, show_all: bool = False) -> str | None:
 
 def print_header(show_all: bool):
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
-    print(f"{C.WHITE} 🤖📞 SIP AI Assistant - Event Log{C.NC}")
+    print(f"{C.WHITE} 🤖📞 SIP AI Assistant - CHAOS.CORP{C.NC}")
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
     # if show_all:
     #     print(f"{C.GRAY}  Mode: ALL logs{C.NC}")

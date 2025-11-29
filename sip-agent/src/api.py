@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 if TYPE_CHECKING:
     from main import SIPAIAssistant
+    from call_queue import CallQueue
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class OutboundCallResponse(BaseModel):
     call_id: str
     status: CallStatus
     message: str
+    queue_position: Optional[int] = None
 
 
 class WebhookPayload(BaseModel):
@@ -102,8 +104,9 @@ class WebhookPayload(BaseModel):
 class OutboundCallHandler:
     """Handles outbound notification calls."""
     
-    def __init__(self, assistant: 'SIPAIAssistant'):
+    def __init__(self, assistant: 'SIPAIAssistant', call_queue: 'CallQueue' = None):
         self.assistant = assistant
+        self.call_queue = call_queue
         self.pending_calls: Dict[str, OutboundCallRequest] = {}
         self._call_counter = 0
         
@@ -113,23 +116,25 @@ class OutboundCallHandler:
         import time
         return f"out-{int(time.time())}-{self._call_counter}"
         
-    async def initiate_call(self, request: OutboundCallRequest) -> str:
+    async def initiate_call(self, request: OutboundCallRequest) -> tuple[str, int]:
         """
         Initiate an outbound call.
-        Returns the call ID.
+        Returns (call_id, queue_position).
         """
         call_id = request.call_id or self.generate_call_id()
         
         log_event(logger, logging.INFO, f"Initiating outbound call to {request.extension}",
                  event="outbound_call_initiated", call_id=call_id, extension=request.extension)
         
-        # Store request
-        self.pending_calls[call_id] = request
-        
-        # Execute call in background
-        asyncio.create_task(self._execute_call(call_id, request))
-        
-        return call_id
+        # Use queue if available
+        if self.call_queue:
+            queued_call = await self.call_queue.enqueue(call_id, request)
+            return call_id, queued_call.position
+        else:
+            # Direct execution (no queue)
+            self.pending_calls[call_id] = request
+            asyncio.create_task(self._execute_call(call_id, request))
+            return call_id, 0
         
     async def _execute_call(self, call_id: str, request: OutboundCallRequest):
         """Execute the outbound call flow."""
@@ -368,7 +373,7 @@ class OutboundCallHandler:
 # FastAPI Application
 # ============================================================================
 
-def create_api(assistant: 'SIPAIAssistant') -> FastAPI:
+def create_api(assistant: 'SIPAIAssistant', call_queue: 'CallQueue' = None) -> FastAPI:
     """Create FastAPI application for outbound calls."""
     
     app = FastAPI(
@@ -377,14 +382,29 @@ def create_api(assistant: 'SIPAIAssistant') -> FastAPI:
         version="1.0.0"
     )
     
-    handler = OutboundCallHandler(assistant)
+    handler = OutboundCallHandler(assistant, call_queue)
     
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
-        return {
+        result = {
             "status": "healthy",
             "sip_registered": assistant.sip_handler._registered.is_set() if hasattr(assistant.sip_handler, '_registered') else False
+        }
+        if call_queue:
+            result["queue"] = await call_queue.get_queue_status()
+        return result
+    
+    @app.get("/queue")
+    async def queue_status():
+        """Get call queue status."""
+        if not call_queue:
+            return {"enabled": False}
+        
+        status = await call_queue.get_queue_status()
+        return {
+            "enabled": True,
+            **status
         }
     
     @app.post("/call", response_model=OutboundCallResponse)
@@ -394,6 +414,8 @@ def create_api(assistant: 'SIPAIAssistant') -> FastAPI:
         
         The call will be made asynchronously. If callback_url is provided,
         results will be POSTed there when the call completes.
+        
+        Calls are queued and processed sequentially to prevent overwhelming the SIP system.
         
         Note: callback_url is required when using choice collection.
         
@@ -423,11 +445,12 @@ def create_api(assistant: 'SIPAIAssistant') -> FastAPI:
         ```
         """
         try:
-            call_id = await handler.initiate_call(request)
+            call_id, position = await handler.initiate_call(request)
             return OutboundCallResponse(
                 call_id=call_id,
                 status=CallStatus.QUEUED,
-                message="Call initiated"
+                message=f"Call queued at position {position}" if position > 0 else "Call initiated",
+                queue_position=position if position > 0 else None
             )
         except Exception as e:
             logger.error(f"Failed to initiate call: {e}")
@@ -435,16 +458,34 @@ def create_api(assistant: 'SIPAIAssistant') -> FastAPI:
     
     @app.get("/call/{call_id}")
     async def get_call_status(call_id: str):
-        """Get status of a pending call."""
+        """Get status of a call."""
+        # Check queue first
+        if call_queue:
+            queued_call = await call_queue.get_call(call_id)
+            if queued_call:
+                return {
+                    "call_id": call_id,
+                    "status": queued_call.status.value,
+                    "queued_at": queued_call.queued_at,
+                    "started_at": queued_call.started_at,
+                    "completed_at": queued_call.completed_at,
+                    "error": queued_call.error
+                }
+        
+        # Check pending calls (direct execution mode)
         if call_id in handler.pending_calls:
             return {
                 "call_id": call_id,
                 "status": "in_progress",
                 "extension": handler.pending_calls[call_id].extension
             }
+            
         return {
             "call_id": call_id,
             "status": "not_found"
         }
+    
+    # Store handler reference for queue worker
+    app.state.handler = handler
     
     return app
