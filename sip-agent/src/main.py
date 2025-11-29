@@ -118,11 +118,9 @@ class SIPAIAssistant:
         ]
         
         self.thinking_phrases = [
-            "Let me think about that.",
-            "Give me a second.",
-            "Let me check.",
-            "One moment please.",
-            "Hmm, let me see."
+            "Stand by",
+            "Checking",
+            "On it",
         ]
         
         self.greeting_phrases = [

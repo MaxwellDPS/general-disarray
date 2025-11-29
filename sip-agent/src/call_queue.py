@@ -145,10 +145,7 @@ class CallQueue:
         )
         
         # Add to queue
-        await self.redis.rpush(self.QUEUE_KEY, call_id)
-        
-        # Get position
-        position = await self.redis.llen(self.QUEUE_KEY)
+        position = await self.redis.rpush(self.QUEUE_KEY, call_id)
         queued_call.position = position
         
         log_event(logger, logging.INFO, f"Call {call_id} queued at position {position}",

@@ -79,19 +79,18 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       # STT Settings (Whisper)
       - WHISPER__MODEL=${WHISPER_MODEL:-Systran/faster-distil-whisper-small.en}
-      # Use 'auto' for compute type - float16 may not be supported on all GPUs
-      # Options: auto, int8, int8_float16, int8_float32, int8_bfloat16, 
+      # Options: default, int8, int8_float16, int8_float32, int8_bfloat16, 
       #          int16, float16, bfloat16, float32
       - WHISPER__COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-default}
-      - WHISPER__DEVICE=cuda
-      - WHISPER__INFERENCE_CONFIG__BEAM_SIZE=1
+      - WHISPER__DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER__INFERENCE_CONFIG__BEAM_SIZE=${WHISPER_BEAM_SIZE:-1}
       - WHISPER__INFERENCE_CONFIG__LANGUAGE=${WHISPER_LANGUAGE:-en}
       - WHISPER__INFERENCE_CONFIG__VAD_FILTER=true
       - WHISPER__INFERENCE_CONFIG__BEST_OF=1
       # Model TTL settings - prevent unloading (-1 = never unload)
-      - STT_MODEL_TTL=-1
-      - TTS_MODEL_TTL=-1
-      - VAD_MODEL_TTL=-1
+      - STT_MODEL_TTL=${STT_MODEL_TTL:--1}
+      - TTS_MODEL_TTL=${TTS_MODEL_TTL:--1}
+      - VAD_MODEL_TTL=${VAD_MODEL_TTL:--1}
       - UVICORN_PORT=8001
       # TTS is configured via API request parameters (model/voice)
     ports:

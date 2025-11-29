@@ -583,7 +583,7 @@ class SIPHandler:
             ep_cfg = pj.EpConfig()
             ep_cfg.logConfig.level = 1
             ep_cfg.logConfig.consoleLevel = 1
-            ep_cfg.uaConfig.maxCalls = 1
+            ep_cfg.uaConfig.maxCalls = int(os.environ.get("SIP_MAX_CALLS", "4"))
             ep_cfg.uaConfig.userAgent = "SIP-AI-Assistant/1.0"
             
             self.endpoint.libInit(ep_cfg)

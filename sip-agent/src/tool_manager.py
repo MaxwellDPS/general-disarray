@@ -301,8 +301,12 @@ class WeatherTool(BaseTool):
             lightning_strike_last_distance_miles = round(lightning_strike_last_distance * 0.621371) if lightning_strike_last_distance is not None else None
             
             # Wind direction to cardinal
-            directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-                         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+            directions = [
+                "North", "North North East", "North East", "East North East",
+                "East", "East South East", "South East", "South South East",
+                "South", "South South West", "South West", "West South West",
+                "West", "West North West", "North West", "North North West"
+            ]
             wind_cardinal = directions[int((wind_dir + 11.25) / 22.5) % 16] if wind_dir is not None else None
             
             # Build natural language response
