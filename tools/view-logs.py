@@ -212,7 +212,7 @@ def format_log(line: str, show_all: bool = False) -> str | None:
 
 def print_header(show_all: bool):
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
-    print(f"{C.WHITE}  SIP AI Assistant - Event Log{C.NC}")
+    print(f"{C.WHITE} 🤖📞 SIP AI Assistant - Event Log{C.NC}")
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
     # if show_all:
     #     print(f"{C.GRAY}  Mode: ALL logs{C.NC}")
