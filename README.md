@@ -77,6 +77,33 @@ A voice-based AI assistant that answers phone calls via SIP, powered by local LL
 
 4. **Call the SIP extension** configured in your `.env`
 
+## Docker Images
+
+Pre-built multi-architecture images are available:
+
+| Registry | Image |
+|----------|-------|
+| Docker Hub | `chaoscorp/sip-agent` |
+| GHCR | `ghcr.io/<owner>/sip-agent` |
+
+**Supported Platforms:**
+- `linux/amd64` (x86_64)
+- `linux/arm64` (ARM64, DGX Spark compatible)
+
+**Tags:**
+- `latest` - Latest stable release
+- `v1.0.0` - Specific version
+- `sha-abc1234` - Specific commit
+
+Pull example:
+```bash
+# Docker Hub
+docker pull chaoscorp/sip-agent:latest
+
+# GitHub Container Registry
+docker pull ghcr.io/<owner>/sip-agent:latest
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -161,6 +188,8 @@ Assistant: "Goodbye! Have a great day. [TOOL:HANGUP]"
 ## Outbound Call API
 
 The assistant includes a REST API for initiating outbound notification calls with optional response collection.
+
+Full OpenAPI specification available in `openapi.yaml`.
 
 ### Endpoints
 
@@ -330,12 +359,16 @@ The included `view-logs.py` script provides filtered, formatted log output:
 
 ```
 sip-agent-speaches/
+├── .github/
+│   └── workflows/
+│       └── docker-build.yml  # CI/CD for multi-arch builds
 ├── docker-compose.yml    # Service definitions
 ├── Dockerfile            # SIP agent container
 ├── .env.example          # Configuration template
 ├── requirements.txt      # Python dependencies
 ├── main.py               # Main orchestrator
 ├── api.py                # REST API for outbound calls
+├── openapi.yaml          # OpenAPI 3.0 specification
 ├── sip_handler.py        # PJSIP call handling
 ├── audio_pipeline.py     # STT/TTS via Speaches API
 ├── llm_engine.py         # LLM client (vLLM/OpenAI API)
@@ -410,6 +443,36 @@ Ensure the LLM response contains the exact format:
    ```
    - WEATHER: [TOOL:WEATHER:location=CITY]
    ```
+
+## CI/CD
+
+GitHub Actions automatically builds and pushes multi-architecture Docker images on:
+- Push to `main`/`master` branch
+- Version tags (`v*`)
+- Pull requests (build only, no push)
+
+### Required Secrets
+
+To enable Docker Hub pushes, add these secrets to your GitHub repository:
+
+| Secret | Description |
+|--------|-------------|
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+
+GHCR authentication uses the built-in `GITHUB_TOKEN`.
+
+### Manual Build
+
+Build locally for a specific platform:
+
+```bash
+# x86_64
+docker build -t sip-agent:local .
+
+# ARM64 (requires buildx)
+docker buildx build --platform linux/arm64 -t sip-agent:local-arm64 .
+```
 
 ## License
 

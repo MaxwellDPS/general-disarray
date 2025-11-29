@@ -1,0 +1,378 @@
+openapi: 3.0.3
+info:
+  title: SIP AI Assistant API
+  description: |
+    REST API for initiating outbound notification calls with optional response collection.
+    
+    ## Overview
+    
+    This API allows you to:
+    - Make outbound calls to SIP extensions
+    - Play pre-defined messages
+    - Optionally collect user responses via voice
+    - Receive results via webhook callback
+    
+    ## Authentication
+    
+    Currently no authentication is required. Secure access via network policies or API gateway.
+    
+    ## Webhook Callbacks
+    
+    When `callback_url` is provided, results are POSTed after call completion.
+    Webhook is **required** when using choice collection.
+  version: 1.0.0
+  contact:
+    name: SIP AI Assistant
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /health:
+    get:
+      summary: Health Check
+      description: Check if the service is healthy and SIP is registered
+      operationId: healthCheck
+      tags:
+        - System
+      responses:
+        '200':
+          description: Service health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                sip_registered: true
+
+  /call:
+    post:
+      summary: Initiate Outbound Call
+      description: |
+        Initiate an outbound notification call to a SIP extension.
+        
+        The call is made asynchronously. The endpoint returns immediately with a call ID,
+        and the actual call happens in the background.
+        
+        If `callback_url` is provided, a webhook POST is sent when the call completes.
+        
+        **Note:** `callback_url` is required when using `choice` collection.
+      operationId: initiateCall
+      tags:
+        - Calls
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutboundCallRequest'
+            examples:
+              simple_notification:
+                summary: Simple notification (no webhook)
+                value:
+                  message: "Hello, this is a reminder about your appointment tomorrow at 2pm."
+                  extension: "1001"
+                  ring_timeout: 30
+              with_webhook:
+                summary: Notification with webhook
+                value:
+                  message: "Your package has been delivered."
+                  extension: "1001"
+                  callback_url: "https://example.com/webhook"
+              with_choice:
+                summary: Choice collection (webhook required)
+                value:
+                  message: "Hello, this is a reminder about your appointment tomorrow at 2pm."
+                  extension: "1001"
+                  callback_url: "https://example.com/webhook"
+                  ring_timeout: 30
+                  choice:
+                    prompt: "Would you like to confirm or cancel? Say yes to confirm or no to cancel."
+                    options:
+                      - value: "confirmed"
+                        synonyms: ["yes", "yeah", "yep", "confirm", "okay", "sure"]
+                      - value: "cancelled"
+                        synonyms: ["no", "nope", "cancel", "nevermind"]
+                    timeout_seconds: 15
+                    repeat_count: 2
+      responses:
+        '200':
+          description: Call initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundCallResponse'
+              example:
+                call_id: "out-1234567890-1"
+                status: "queued"
+                message: "Call initiated"
+        '400':
+          description: Invalid request (e.g., choice without callback_url)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "callback_url is required when choice is specified"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /call/{call_id}:
+    get:
+      summary: Get Call Status
+      description: Check the status of a pending outbound call
+      operationId: getCallStatus
+      tags:
+        - Calls
+      parameters:
+        - name: call_id
+          in: path
+          required: true
+          description: The call ID returned from POST /call
+          schema:
+            type: string
+          example: "out-1234567890-1"
+      responses:
+        '200':
+          description: Call status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallStatusResponse'
+              examples:
+                in_progress:
+                  summary: Call in progress
+                  value:
+                    call_id: "out-1234567890-1"
+                    status: "in_progress"
+                    extension: "1001"
+                not_found:
+                  summary: Call not found (completed or invalid)
+                  value:
+                    call_id: "out-1234567890-1"
+                    status: "not_found"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+          description: Service health status
+        sip_registered:
+          type: boolean
+          description: Whether SIP registration is active
+
+    OutboundCallRequest:
+      type: object
+      required:
+        - message
+        - extension
+      properties:
+        message:
+          type: string
+          description: Message to speak to the recipient
+          example: "Hello, this is a reminder about your appointment."
+        extension:
+          type: string
+          description: SIP extension, phone number, or full SIP URI
+          example: "1001"
+        callback_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            Webhook URL to POST results to when call completes.
+            Required when using `choice` collection.
+          example: "https://example.com/webhook"
+        ring_timeout:
+          type: integer
+          default: 30
+          minimum: 5
+          maximum: 120
+          description: Seconds to wait for call to be answered
+        choice:
+          $ref: '#/components/schemas/ChoicePrompt'
+        call_id:
+          type: string
+          nullable: true
+          description: Optional caller-provided ID for tracking
+          example: "my-custom-id-123"
+
+    ChoicePrompt:
+      type: object
+      required:
+        - prompt
+        - options
+      description: Configuration for collecting user voice response
+      properties:
+        prompt:
+          type: string
+          description: Question to ask the user
+          example: "Would you like to confirm or cancel?"
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChoiceOption'
+          minItems: 1
+          description: List of valid choice options
+        timeout_seconds:
+          type: integer
+          default: 30
+          minimum: 5
+          maximum: 60
+          description: Seconds to wait for user response
+        repeat_count:
+          type: integer
+          default: 2
+          minimum: 1
+          maximum: 5
+          description: Times to repeat prompt if no response detected
+
+    ChoiceOption:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+          description: Value returned in webhook if this option is selected
+          example: "confirmed"
+        synonyms:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Alternative phrases that map to this choice
+          example: ["yes", "yeah", "yep", "confirm"]
+
+    OutboundCallResponse:
+      type: object
+      properties:
+        call_id:
+          type: string
+          description: Unique identifier for tracking the call
+          example: "out-1234567890-1"
+        status:
+          $ref: '#/components/schemas/CallStatus'
+        message:
+          type: string
+          description: Human-readable status message
+          example: "Call initiated"
+
+    CallStatusResponse:
+      type: object
+      properties:
+        call_id:
+          type: string
+        status:
+          type: string
+          enum: [in_progress, not_found]
+        extension:
+          type: string
+          description: Present only if status is in_progress
+
+    CallStatus:
+      type: string
+      enum:
+        - queued
+        - ringing
+        - answered
+        - completed
+        - no_answer
+        - failed
+        - busy
+      description: |
+        - `queued` - Call is queued for processing
+        - `ringing` - Call is ringing
+        - `answered` - Call was answered
+        - `completed` - Call completed successfully
+        - `no_answer` - Call was not answered within ring timeout
+        - `failed` - Call failed to connect
+        - `busy` - Extension was busy
+
+    WebhookPayload:
+      type: object
+      description: Payload POSTed to callback_url when call completes
+      properties:
+        call_id:
+          type: string
+          description: Call identifier
+          example: "out-1234567890-1"
+        status:
+          $ref: '#/components/schemas/CallStatus'
+        extension:
+          type: string
+          description: Extension that was called
+          example: "1001"
+        duration_seconds:
+          type: number
+          format: float
+          description: Total call duration in seconds
+          example: 45.2
+        message_played:
+          type: boolean
+          description: Whether the message was successfully played
+        choice_response:
+          type: string
+          nullable: true
+          description: Matched choice value (if choice was configured)
+          example: "confirmed"
+        choice_raw_text:
+          type: string
+          nullable: true
+          description: Raw transcription of user's response
+          example: "yes I confirm"
+        error:
+          type: string
+          nullable: true
+          description: Error message if call failed
+      example:
+        call_id: "out-1234567890-1"
+        status: "completed"
+        extension: "1001"
+        duration_seconds: 45.2
+        message_played: true
+        choice_response: "confirmed"
+        choice_raw_text: "yes I confirm"
+        error: null
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error description
+          example: "callback_url is required when choice is specified"
+
+  callbacks:
+    callComplete:
+      '{$request.body#/callback_url}':
+        post:
+          summary: Call Completion Webhook
+          description: Sent to callback_url when the outbound call completes
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/WebhookPayload'
+          responses:
+            '200':
+              description: Webhook received successfully
+
+tags:
+  - name: System
+    description: Health and status endpoints
+  - name: Calls
+    description: Outbound call management
