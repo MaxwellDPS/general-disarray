@@ -325,6 +325,14 @@ class ToolManager:
         """Execute a tool call with interception."""
         tool_name = tool_call.name.upper()
         
+        # Log tool invocation (convert params to simple dict for JSON)
+        try:
+            params_dict = {k: str(v) for k, v in tool_call.params.items()}
+        except:
+            params_dict = {}
+        log_event(logger, logging.INFO, f"Tool called: {tool_name}",
+                 event="tool_call", tool=tool_name, params=params_dict)
+        
         if tool_name not in self.tools:
             return ToolResult(status=ToolStatus.FAILED, message=f"Unknown tool: {tool_name}")
             
@@ -360,7 +368,7 @@ class ToolManager:
                             message="No callback number available - please specify a number"
                         )
                 
-                logger.info(f"Processing CALLBACK: delay={delay}, dest={destination}")
+                logger.debug(f"Processing CALLBACK: delay={delay}, dest={destination}")
                 
                 # Schedule the callback
                 await self.assistant.schedule_callback(delay, message, destination)
@@ -400,7 +408,9 @@ class ToolManager:
         )
         
         self.scheduled_tasks[task_id] = task
-        logger.info(f"Scheduled task {task_id}: {task_type} in {delay_seconds}s")
+        log_event(logger, logging.INFO, f"Task scheduled: {task_type} in {delay_seconds}s",
+                 event="task_scheduled", task_id=task_id, task_type=task_type, 
+                 delay=delay_seconds, target=str(target_uri) if target_uri else None)
         
         return task_id
         

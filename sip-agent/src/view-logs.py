@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
 SIP AI Assistant - Log Viewer
-Filters and displays interesting events from JSON logs.
+Filters and displays interesting events from JSON logs, grouped by call.
 
 Usage:
     ./view-logs.py                          # Tail docker compose logs
-    ./view-logs.py sip-ai-assistant         # Tail specific container  
+    ./view-logs.py sip-agent                # Tail specific service
     ./view-logs.py -a                       # Show ALL logs (not just events)
-    docker logs -f container | ./view-logs.py --stdin
+    docker compose logs -f | ./view-logs.py --stdin
 """
 
 import sys
 import json
 import argparse
 import subprocess
+from datetime import datetime
 
 # ANSI colors
 class C:
@@ -28,54 +29,80 @@ class C:
     BOLD = '\033[1m'
     NC = '\033[0m'
 
-# Event styling: event_name -> (icon, color)
+# Event styling: event_name -> (icon, color, category)
+# Categories: 'system', 'call', 'speech', 'tool', 'task'
 EVENT_STYLE = {
-    # Startup
-    'warming_up': ('🔥', C.YELLOW),
-    'ready': ('✅', C.GREEN),
+    # System events
+    'warming_up': ('🔥', C.YELLOW, 'system'),
+    'ready': ('✅', C.GREEN, 'system'),
     
-    # Call events
-    'call_start': ('📞', C.GREEN),
-    'call_end': ('📴', C.RED),
-    'call_timeout': ('📴', C.RED),
+    # Call lifecycle
+    'call_start': ('📞', C.GREEN, 'call'),
+    'call_end': ('📴', C.RED, 'call'),
+    'call_timeout': ('📴', C.RED, 'call'),
     
-    # Speech events
-    'user_speech': ('🎤', C.CYAN),
-    'assistant_response': ('🤖', C.MAGENTA),
-    'assistant_ack': ('💬', C.MAGENTA),
+    # Speech/conversation
+    'user_speech': ('🎤', C.CYAN, 'speech'),
+    'assistant_response': ('🤖', C.MAGENTA, 'speech'),
+    'assistant_ack': ('💬', C.MAGENTA, 'speech'),
+    'barge_in': ('✋', C.YELLOW, 'speech'),
     
-    # Timer/Callback events
-    'timer_set': ('⏰', C.YELLOW),
-    'timer_fired': ('🔔', C.YELLOW),
-    'callback_scheduled': ('📲', C.BLUE),
-    'callback_execute': ('📲', C.BLUE),
-    'callback_complete': ('✅', C.GREEN),
+    # Tool invocations
+    'tool_call': ('🔧', C.WHITE, 'tool'),
+    'timer_set': ('⏰', C.YELLOW, 'tool'),
+    'callback_scheduled': ('📲', C.BLUE, 'tool'),
     
-    # Tool events
-    'tool_call': ('🔧', C.WHITE),
-    'task_execute': ('⚡', C.WHITE),
-    
-    # Other
-    'barge_in': ('✋', C.YELLOW),
+    # Task execution
+    'task_scheduled': ('📋', C.BLUE, 'task'),
+    'task_execute': ('⚡', C.WHITE, 'task'),
+    'timer_fired': ('🔔', C.YELLOW, 'task'),
+    'callback_execute': ('📲', C.BLUE, 'task'),
+    'callback_complete': ('✅', C.GREEN, 'task'),
 }
+
+class CallTracker:
+    """Track calls and format output with grouping."""
+    
+    def __init__(self):
+        self.in_call = False
+        self.current_caller = None
+        self.call_count = 0
+        
+    def print_call_header(self, caller: str, direction: str = "inbound"):
+        """Print a call start header."""
+        self.call_count += 1
+        self.in_call = True
+        self.current_caller = caller
+        
+        arrow = "⬅️" if direction == "inbound" else "➡️"
+        print(f"\n{C.GREEN}{'━' * 70}{C.NC}")
+        print(f"{C.GREEN}  {arrow} CALL #{self.call_count}: {caller}{C.NC}")
+        print(f"{C.GREEN}{'━' * 70}{C.NC}\n")
+        
+    def print_call_footer(self):
+        """Print a call end footer."""
+        if self.in_call:
+            print(f"\n{C.RED}{'─' * 70}{C.NC}")
+            print(f"{C.RED}  ✗ CALL ENDED{C.NC}")
+            print(f"{C.RED}{'─' * 70}{C.NC}\n")
+        self.in_call = False
+        self.current_caller = None
+
+tracker = CallTracker()
 
 def format_log(line: str, show_all: bool = False) -> str | None:
     """Format a log line for display. Returns None to skip."""
+    global tracker
+    
     line = line.strip()
     if not line:
         return None
     
-    # Handle docker compose prefix (container name | log)
-    container = None
+    # Handle docker compose prefix (service-name  | log)
     if ' | ' in line:
         parts = line.split(' | ', 1)
         if len(parts) == 2:
-            container = parts[0].strip()
             line = parts[1]
-    
-    # Skip non-assistant containers unless showing all
-    if container and 'assistant' not in container.lower() and not show_all:
-        return None
     
     # Try to parse JSON
     try:
@@ -84,12 +111,11 @@ def format_log(line: str, show_all: bool = False) -> str | None:
             # Not JSON
             if show_all:
                 return f"{C.GRAY}{line}{C.NC}"
-            # Check for errors/warnings in plain text
             lower = line.lower()
             if 'error' in lower:
-                return f"{C.RED}❌ {line}{C.NC}"
+                return f"{C.RED}  ❌ {line}{C.NC}"
             elif 'warning' in lower or 'warn' in lower:
-                return f"{C.YELLOW}⚠️  {line}{C.NC}"
+                return f"{C.YELLOW}  ⚠️  {line}{C.NC}"
             return None
         
         data = json.loads(line[start:])
@@ -100,31 +126,77 @@ def format_log(line: str, show_all: bool = False) -> str | None:
         ts = data.get('ts', '')
         extra = data.get('data', {})
         
-        # Extract time
+        # Extract time (HH:MM:SS)
         time_str = ts
         if ' ' in ts:
             time_str = ts.split(' ')[-1]
             if ',' in time_str:
                 time_str = time_str.split(',')[0]
         
+        # Handle call lifecycle events specially
+        if event == 'call_start':
+            caller = extra.get('caller', msg)
+            direction = extra.get('direction', 'inbound')
+            tracker.print_call_header(caller, direction)
+            return None  # Header already printed
+            
+        if event == 'call_end':
+            tracker.print_call_footer()
+            return None  # Footer already printed
+        
         # Format based on event
         if event and event in EVENT_STYLE:
-            icon, color = EVENT_STYLE[event]
-            output = f"{C.GRAY}{time_str}{C.NC} {icon} {color}[{event}]{C.NC} {msg}"
+            icon, color, category = EVENT_STYLE[event]
+            
+            # Indent based on category
+            indent = "  "
+            if category == 'speech':
+                indent = "    "  # Extra indent for conversation
+            elif category in ('tool', 'task'):
+                indent = "      "  # Extra indent for tools/tasks
+            
+            # Build output line
+            output = f"{C.GRAY}{time_str}{C.NC} {indent}{icon} {color}{msg}{C.NC}"
+            
+            # Add relevant extra data
             if extra:
-                extra_str = ' '.join(f"{k}={v}" for k, v in extra.items())
-                output += f" {C.GRAY}({extra_str}){C.NC}"
+                # Filter out redundant info already in message
+                show_keys = []
+                if event == 'user_speech':
+                    pass  # Text already in msg
+                elif event == 'tool_call':
+                    show_keys = ['params']
+                elif event == 'task_scheduled':
+                    show_keys = ['delay', 'target']
+                elif event in ('timer_set', 'timer_fired'):
+                    show_keys = ['duration', 'message']
+                elif event == 'callback_scheduled':
+                    show_keys = ['delay', 'destination']
+                else:
+                    show_keys = list(extra.keys())
+                
+                if show_keys:
+                    extra_parts = []
+                    for k in show_keys:
+                        if k in extra and extra[k]:
+                            v = extra[k]
+                            if isinstance(v, dict):
+                                v = ', '.join(f"{kk}={vv}" for kk, vv in v.items())
+                            extra_parts.append(f"{k}={v}")
+                    if extra_parts:
+                        output += f" {C.GRAY}({', '.join(extra_parts)}){C.NC}"
+            
             return output
         
         # Show errors/warnings
         if level in ('ERROR', 'CRITICAL'):
-            return f"{C.GRAY}{time_str}{C.NC} {C.RED}❌ [{level}]{C.NC} {msg}"
+            return f"{C.GRAY}{time_str}{C.NC}   {C.RED}❌ {msg}{C.NC}"
         if level == 'WARNING':
-            return f"{C.GRAY}{time_str}{C.NC} {C.YELLOW}⚠️  [{level}]{C.NC} {msg}"
+            return f"{C.GRAY}{time_str}{C.NC}   {C.YELLOW}⚠️  {msg}{C.NC}"
         
         # Show all other logs if -a flag
         if show_all:
-            return f"{C.GRAY}{time_str} [{level}] {msg}{C.NC}"
+            return f"{C.GRAY}{time_str}   {msg}{C.NC}"
         
         return None
         
@@ -133,21 +205,20 @@ def format_log(line: str, show_all: bool = False) -> str | None:
             return f"{C.GRAY}{line}{C.NC}"
         lower = line.lower()
         if 'error' in lower:
-            return f"{C.RED}❌ {line}{C.NC}"
+            return f"{C.RED}  ❌ {line}{C.NC}"
         elif 'warning' in lower or 'warn' in lower:
-            return f"{C.YELLOW}⚠️  {line}{C.NC}"
+            return f"{C.YELLOW}  ⚠️  {line}{C.NC}"
         return None
 
 def print_header(show_all: bool):
-    events = ', '.join(EVENT_STYLE.keys())
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
-    print(f"{C.WHITE}  SIP AI Assistant - Log Viewer{C.NC}")
+    print(f"{C.WHITE}  SIP AI Assistant - Event Log{C.NC}")
     print(f"{C.WHITE}{'═' * 70}{C.NC}")
     if show_all:
-        print(f"{C.GRAY}Mode: Showing ALL logs{C.NC}")
+        print(f"{C.GRAY}  Mode: ALL logs{C.NC}")
     else:
-        print(f"{C.GRAY}Events: {events}{C.NC}")
-        print(f"{C.GRAY}Use -a to show all logs{C.NC}")
+        print(f"{C.GRAY}  Showing: calls, speech, tools, tasks, errors{C.NC}")
+        print(f"{C.GRAY}  Use -a to show all logs{C.NC}")
     print(f"{C.WHITE}{'─' * 70}{C.NC}")
     print()
 
@@ -162,9 +233,9 @@ def process_stream(stream, show_all: bool):
 def main():
     parser = argparse.ArgumentParser(description='View SIP AI Assistant logs')
     parser.add_argument('container', nargs='?', default='sip-agent',
-                       help='Container name (default: sip-agent)')
+                       help='Service name (default: sip-agent)')
     parser.add_argument('--stdin', action='store_true',
-                       help='Read from stdin instead of docker logs')
+                       help='Read from stdin instead of docker compose logs')
     parser.add_argument('-a', '--all', action='store_true',
                        help='Show all logs, not just interesting events')
     parser.add_argument('--no-header', action='store_true',
@@ -178,13 +249,15 @@ def main():
         if args.stdin:
             process_stream(sys.stdin, args.all)
         else:
-            cmd = ['docker', 'compose', 'logs', '-f', args.container]
-            print(f"{C.GRAY}Running: {' '.join(cmd)}{C.NC}\n")
+            cmd = ['docker', 'compose', 'logs', '--tail', '0', '-f', args.container]
+            print(f"{C.GRAY}  Running: {' '.join(cmd)}{C.NC}\n")
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=1
+                text=True,         # Enable text mode
+                bufsize=1,         # Line buffering (now works)
+                errors='replace'   # Handle encoding errors
             )
             process_stream(process.stdout, args.all)
             
