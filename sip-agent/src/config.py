@@ -91,7 +91,7 @@ class Config:
     # LLM Configuration
     # ===================
     llm_backend: str = field(default_factory=lambda: os.getenv("LLM_BACKEND", "vllm"))
-    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "meta-llama/Llama-3.1-70B-Instruct"))
+    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "openai-community/gpt2-xl"))
     llm_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", "http://vllm:8000/v1"))
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", "not-needed"))
     
@@ -137,7 +137,7 @@ class Config:
         
         Tools are dynamically added by ToolManager.get_tools_prompt()
         """
-        return """You are a voice assistant  on a phone call. Follow these guidelines:
+        return """You are a voice assistant on a phone call. Follow these guidelines:
 
 RULES:
 - Keep responses SHORT (2-6 sentences max)
