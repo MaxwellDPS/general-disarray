@@ -125,7 +125,7 @@ jobs:
             echo "PR build - images not pushed to registries" >> $GITHUB_STEP_SUMMARY
           fi
 
-  build:
+  build-nvitop:
     name: Build and Push nvtitop-exporter Docker Image
     runs-on: ubuntu-latest
     permissions:
