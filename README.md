@@ -511,41 +511,6 @@ SPEACHES_API_URL=http://localhost:8001
 
 ---
 
-## 🐳 Docker Compose
-
-```yaml
-services:
-  sip-agent:
-    build: ./sip-agent
-    network_mode: host  # Required for SIP/RTP
-    environment:
-      - SIP_USER=${SIP_USER}
-      - SIP_PASSWORD=${SIP_PASSWORD}
-      - SIP_DOMAIN=${SIP_DOMAIN}
-      - SPEACHES_API_URL=${SPEACHES_API_URL}
-      - LLM_BASE_URL=${LLM_BASE_URL}
-      - LLM_MODEL=${LLM_MODEL}
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-    depends_on:
-      - speaches
-
-  speaches:
-    image: ghcr.io/speaches-ai/speaches:latest
-    ports:
-      - "8001:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-```
-
----
-
 ## 📖 Documentation
 
 **📚 Full documentation available at [sip-agent.readme.io](https://sip-agent.readme.io)**
