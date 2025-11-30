@@ -7,21 +7,21 @@ on:
     tags:
       - 'v*'
     paths:
-      - 'sip-agent/**'
+      - 'nvitop/**'
   pull_request:
     branches:
       - main
     paths:
-      - 'sip-agent/**'
+      - 'nvitop/**'
 env:
   # Docker Hub
-  DOCKERHUB_REPO: chaoscorp/sip-agent
+  DOCKERHUB_REPO: chaoscorp/nvitop-exporter
   # GitHub Container Registry
-  GHCR_REPO: ghcr.io/${{ github.repository_owner }}/sip-agent
+  GHCR_REPO: ghcr.io/${{ github.repository_owner }}/nvitop-exporter
 
 jobs:
   build:
-    name: Build and Push sip-agent Docker Image
+    name: Build and Push nvtitop-exporter Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,6 +30,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+        
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -82,8 +85,8 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v5
         with:
-          context: ./sip-agent/
-          file: ./sip-agent/Dockerfile
+          context: nvitop/
+          file: nvitop/nvitop-exporter/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
           tags: ${{ steps.meta.outputs.tags }}
@@ -95,8 +98,8 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
-          context: ./sip-agent/
-          file: ./sip-agent/Dockerfile
+          context: nvitop/
+          file: nvitop/nvitop-exporter/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
