@@ -1,5 +1,5 @@
-# 📞⚡ General Dissarray
-## 🤖 SIP Enabled AI Agent
+# 📞 SIP AI Assistant
+
 > 🤖 **ROBO CODED** — This project was made with AI and may not be 100% sane. But the code does work! 🎉
 
 A voice-powered AI assistant that answers phone calls, understands natural language, and performs actions like checking weather, setting timers, scheduling callbacks, and more.
@@ -184,13 +184,13 @@ curl http://localhost:8080/health | jq
 ┌────────────────────────────────────────────────────────────┐
 │ 📞 INCOMING CALL                                           │
 ├────────────────────────────────────────────────────────────┤
-│ 🤖 "Hello! Welcome to the AI assistant. How can I help?"   │
+│ 🤖 "Hello! Welcome to the AI assistant. How can I help?"  │
 │ 👤 "What's the weather like?"                              │
-│ 🤖 "At Storm Lake, it's 44 degrees with foggy conditions." │
+│ 🤖 "At Storm Lake, it's 44 degrees with foggy conditions."│
 │ 👤 "Set a timer for 5 minutes"                             │
-│ 🤖 "Timer set for 5 minutes!"                              │
+│ 🤖 "Timer set for 5 minutes!"                             │
 │ 👤 "Goodbye"                                               │
-│ 🤖 "Goodbye! Have a great day!"                            │
+│ 🤖 "Goodbye! Have a great day!"                           │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -231,9 +231,7 @@ curl -X POST http://localhost:8080/call \
   -H "Content-Type: application/json" \
   -d '{
     "extension": "5551234567",
-    "message": "Hello! This is a reminder about your appointment tomorrow.",
-    "at_time": "07:00",
-    "timezone": "America/Los_Angeles",
+    "message": "Hello! This is a reminder about your appointment tomorrow."
   }'
 ```
 
@@ -296,6 +294,168 @@ curl http://localhost:8080/tools | jq '.[].name'
 "CALC"
 "JOKE"
 ```
+
+---
+
+## 🧠 Recommended Models
+
+### NVIDIA H100 / A100 (80GB HBM)
+
+Data center GPUs with maximum performance.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `meta-llama/Llama-3.1-70B-Instruct` | Best quality, fits in single GPU |
+| **LLM** | `Qwen/Qwen2.5-72B-Instruct` | Alternative, excellent reasoning |
+| **STT** | `Systran/faster-whisper-large-v3` | Best accuracy |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# H100/A100 80GB Configuration
+LLM_MODEL=meta-llama/Llama-3.1-70B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-large-v3
+TTS_VOICE=af_heart
+```
+
+---
+
+### NVIDIA DGX Spark (128GB Unified)
+
+Grace Blackwell GB10 with shared CPU/GPU memory.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `meta-llama/Llama-3.1-70B-Instruct` | Fits in unified memory |
+| **LLM** | `Qwen/Qwen2.5-72B-Instruct` | Alternative option |
+| **LLM** | `deepseek-ai/DeepSeek-R1-Distill-Llama-70B` | Reasoning focused |
+| **STT** | `Systran/faster-whisper-large-v3` | Best accuracy |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# DGX Spark Configuration (128GB unified memory)
+LLM_MODEL=meta-llama/Llama-3.1-70B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-large-v3
+TTS_VOICE=af_heart
+```
+
+---
+
+### NVIDIA RTX 5090 (32GB GDDR7)
+
+Next-gen consumer flagship.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `Qwen/Qwen2.5-32B-Instruct` | Best fit for 32GB |
+| **LLM** | `meta-llama/Llama-3.1-8B-Instruct` | Faster, lower quality |
+| **LLM** | `mistralai/Mistral-Small-24B-Instruct-2501` | Good balance |
+| **STT** | `Systran/faster-whisper-large-v3` | Best accuracy |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# RTX 5090 Configuration (32GB VRAM)
+LLM_MODEL=Qwen/Qwen2.5-32B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-large-v3
+TTS_VOICE=af_heart
+```
+
+---
+
+### NVIDIA RTX 4090 (24GB GDDR6X)
+
+Current consumer flagship.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `Qwen/Qwen2.5-14B-Instruct` | Best quality for 24GB |
+| **LLM** | `meta-llama/Llama-3.1-8B-Instruct` | Faster option |
+| **LLM** | `mistralai/Mistral-7B-Instruct-v0.3` | Good tool calling |
+| **STT** | `Systran/faster-whisper-large-v3` | Best accuracy |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# RTX 4090 Configuration (24GB VRAM)
+LLM_MODEL=Qwen/Qwen2.5-14B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-large-v3
+TTS_VOICE=af_heart
+```
+
+---
+
+### NVIDIA RTX 3090 / 4080 (24GB / 16GB)
+
+High-end consumer GPUs.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `meta-llama/Llama-3.1-8B-Instruct` | Best for 16-24GB |
+| **LLM** | `Qwen/Qwen2.5-7B-Instruct` | Fast alternative |
+| **LLM** | `microsoft/Phi-3-medium-4k-instruct` | 14B, good quality |
+| **STT** | `Systran/faster-whisper-medium` | Good balance |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# RTX 3090/4080 Configuration (16-24GB VRAM)
+LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-medium
+TTS_VOICE=af_heart
+```
+
+---
+
+### NVIDIA RTX 3080 / 4070 (10-12GB)
+
+Mid-range GPUs.
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| **LLM** | `Qwen/Qwen2.5-7B-Instruct` | Best for 10-12GB |
+| **LLM** | `microsoft/Phi-3-mini-4k-instruct` | 3.8B, very fast |
+| **LLM** | `meta-llama/Llama-3.2-3B-Instruct` | Lightweight |
+| **STT** | `Systran/faster-whisper-small` | Low VRAM |
+| **TTS** | `af_heart` | Warm, natural voice |
+
+```env
+# RTX 3080/4070 Configuration (10-12GB VRAM)
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+LLM_URL=http://localhost:8000/v1
+STT_MODEL=Systran/faster-whisper-small
+TTS_VOICE=af_heart
+```
+
+---
+
+### Low-Latency Stack (Any GPU)
+
+Optimized for fastest response times.
+
+```env
+# Minimum latency configuration
+LLM_MODEL=Qwen/Qwen2.5-3B-Instruct
+STT_MODEL=Systran/faster-whisper-tiny.en
+TTS_VOICE=af_heart
+TTS_SPEED=1.1
+```
+
+---
+
+### TTS Voice Options
+
+| Voice | Style | Gender | Accent |
+|-------|-------|--------|--------|
+| `af_heart` | Warm, friendly | Female | American |
+| `af_bella` | Professional | Female | American |
+| `af_sarah` | Casual | Female | American |
+| `af_nicole` | Expressive | Female | American |
+| `am_adam` | Neutral | Male | American |
+| `am_michael` | Professional | Male | American |
+| `bf_emma` | Warm | Female | British |
+| `bm_george` | Professional | Male | British |
 
 ---
 
@@ -498,7 +658,6 @@ This project is optimized to run on the [NVIDIA DGX Spark](https://www.nvidia.co
 │ ✅ Multiple concurrent calls                                │
 └─────────────────────────────────────────────────────────────┘
 ```
-![](https://github.com/MaxwellDPS/docs/blob/v1.0/docs/photos/Screenshot%202025-11-29%20214430.png?raw=true)
 
 **Recommended DGX Spark setup:**
 
