@@ -25,6 +25,7 @@ A voice-powered AI assistant that answers phone calls, understands natural langu
 | 🌐 **REST API** | Initiate outbound calls, execute tools, manage schedules |
 | ⏰ **Scheduled Calls** | One-time or recurring calls (daily briefings, reminders) |
 | 🔗 **Webhooks** | Trigger calls from Home Assistant, n8n, Grafana, and more |
+| 🗣️ **Custom Phrases** | Customize greetings, goodbyes, and responses via JSON or env vars |
 | 📊 **Observability** | Prometheus metrics, OpenTelemetry tracing, structured JSON logs |
 
 ---
@@ -85,7 +86,7 @@ flowchart LR
 
 ```bash
 # Clone the repository
-git clone https://github.com/MaxwellDPS/general-disarray.git
+git clone https://github.com/your-org/sip-agent.git
 cd sip-agent
 
 # Configure environment
@@ -250,6 +251,7 @@ curl http://localhost:8080/tools | jq '.[].name'
 | 🕐 `DATETIME` | Current date and time | *"What time is it?"* |
 | 🧮 `CALC` | Math calculations | *"What's 25 times 4?"* |
 | 😄 `JOKE` | Tell a joke | *"Tell me a joke"* |
+| 🦜 `SIMON_SAYS` | Repeat back verbatim | *"Simon says hello world"* |
 
 ---
 
@@ -511,7 +513,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | Resource | Link |
 |----------|------|
 | 📖 Docs | **[sip-agent.readme.io](https://sip-agent.readme.io)** |
-| 🐛 Issues | [GitHub Issues](https://github.com/MaxwellDPS/general-disarray/issues) |
+| 🐛 Issues | [GitHub Issues](https://github.com/your-org/sip-agent/issues) |
+| 💬 Discussions | [GitHub Discussions](https://github.com/your-org/sip-agent/discussions) |
 
 ---
 

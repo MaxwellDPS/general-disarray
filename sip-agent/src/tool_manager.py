@@ -96,6 +96,7 @@ class ToolManager:
         from plugins.joke_tool import JokeTool
         from plugins.datetime_tool import DateTimeTool
         from plugins.calc_tool import CalculatorTool
+        from plugins.simon_says_tool import SimonSaysTool
         
         # All available tool classes
         tool_classes = [
@@ -108,6 +109,7 @@ class ToolManager:
             JokeTool,
             DateTimeTool,
             CalculatorTool,
+            SimonSaysTool,
         ]
         
         for tool_class in tool_classes:
