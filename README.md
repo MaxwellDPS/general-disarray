@@ -1,5 +1,5 @@
-# 📞 SIP AI Assistant
-
+# 📞 General Dissarray
+## 🤖 SIP Enabled AI Agent
 > 🤖 **ROBO CODED** — This project was made with AI and may not be 100% sane. But the code does work! 🎉
 
 A voice-powered AI assistant that answers phone calls, understands natural language, and performs actions like checking weather, setting timers, scheduling callbacks, and more.
