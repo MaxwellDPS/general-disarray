@@ -76,22 +76,11 @@ class LLMEngine:
             
     async def generate_greeting(self) -> str:
         """Generate a greeting for incoming calls."""
-        greetings = [
-            "Hello! This is your AI assistant. How can I help you today?",
-            "Hi there! I'm your AI assistant. What can I do for you?",
-            "Hello! I'm here to help. What would you like to talk about?",
-        ]
-
-        better_greeting = [
-            "Whats up G! Tell the clanka what ya want!",
-            "Resistance is futile! State your business!",
-            "Ready to create chaos, Professor! What do you need?",
-            "Standing by for commands"
-        ]
+        # Use configured greetings
+        greetings = self.config.phrases.greetings
         
-        # Could use LLM for dynamic greeting, but static is faster
         import random
-        return random.choice(better_greeting)
+        return random.choice(greetings)
         
     async def generate_response(
         self,

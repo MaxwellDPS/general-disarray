@@ -474,14 +474,10 @@ class SpeachesTTSClient:
             return False
             
     async def _precache_phrases(self):
-        """Pre-synthesize common acknowledgments."""
-        phrases = [
-            "Okay", "Sure", "Got it", "One moment",
-            "Copy that", "On it", "Checking", "Let me see",
-            "Working on it", "Goodbye", "Hello"
-        ]
+        """Pre-synthesize common phrases from config."""
+        phrases = self.config.phrases.get_all_phrases_for_cache()
         
-        logger.info("Pre-caching common phrases...")
+        logger.info(f"Pre-caching {len(phrases)} phrases...")
         
         for phrase in phrases:
             try:

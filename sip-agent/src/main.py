@@ -101,60 +101,16 @@ class SIPAIAssistant:
         self._audio_loop_task = None
         self._call_lock = asyncio.Lock()
         
-        # Pre-cached phrases for instant playback
-        self.acknowledgments = [
-            "Okay.", "Got it.", "One moment.", "Sure.", "Copy that.",
-            "Alright.", "No problem.", "On it.", "You got it.", "Absolutely.",
-            "Sure thing.", "Will do.", "Of course.", "Right away.", "Consider it done."
-        ]
-        
-        self.thinking_phrases = [
-            "Stand by",
-            "Checking",
-            "On it",
-        ]
-        
-        self.greeting_phrases = [
-            "Hello Professor! What chaos can I help you with today?",
-            "Im sorry dave, i'm afraid i can't do that.",
-            "What do you want, human?",
-            # "Hey! What can I help you with?"
-        ]
-        
-        self.goodbye_phrases = [
-            "Goodbye!",
-            "Take care!",
-            "Have a great day!",
-            "Bye for now!",
-            "Talk to you later!"
-        ]
-        
-        self.error_phrases = [
-            "Sorry, I didn't catch that.",
-            "Could you repeat that please?",
-            "I didn't quite get that.",
-            "Sorry, can you say that again?"
-        ]
-        
-        self.followup_phrases = [
-            "Is there anything else I can help you with?",
-            "Can I help you with anything else?",
-            "Is there something else I can assist with?",
-            "Anything else I can do for you?",
-            "What else can I help you with?",
-            "Is there anything else?",
-            "Do you need help with anything else?"
-        ]
+        # Pre-cached phrases for instant playback - loaded from config
+        self.acknowledgments = self.config.phrases.acknowledgments
+        self.thinking_phrases = self.config.phrases.thinking
+        self.greeting_phrases = self.config.phrases.greetings
+        self.goodbye_phrases = self.config.phrases.goodbyes
+        self.error_phrases = self.config.phrases.errors
+        self.followup_phrases = self.config.phrases.followups
         
         # Combined list for pre-caching
-        self._phrases_to_cache = (
-            self.acknowledgments + 
-            self.thinking_phrases + 
-            self.greeting_phrases + 
-            self.goodbye_phrases +
-            self.error_phrases +
-            self.followup_phrases
-        )
+        self._phrases_to_cache = self.config.phrases.get_all_phrases_for_cache()
         
     async def start(self):
         """Start all components and run main loop."""

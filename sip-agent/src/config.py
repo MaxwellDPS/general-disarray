@@ -7,9 +7,125 @@ All ML inference offloaded to dedicated API services:
 """
 
 import os
+import json
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
+
+
+def _load_phrases_from_env_or_default(env_var: str, defaults: List[str]) -> List[str]:
+    """Load phrases from environment variable (JSON array) or use defaults."""
+    env_value = os.getenv(env_var)
+    if env_value:
+        try:
+            phrases = json.loads(env_value)
+            if isinstance(phrases, list) and len(phrases) > 0:
+                return phrases
+        except json.JSONDecodeError:
+            # Maybe it's a comma-separated string
+            phrases = [p.strip() for p in env_value.split(",") if p.strip()]
+            if phrases:
+                return phrases
+    return defaults
+
+
+@dataclass
+class PhrasesConfig:
+    """Configurable phrases for the voice assistant."""
+    
+    # Greeting phrases - played when call is answered
+    greetings: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_GREETINGS",
+        [
+            "Hello! How can I help you today?",
+            "Hi there! What can I do for you?",
+            "Hey! What do you need?",
+        ]
+    ))
+    
+    # Goodbye phrases - played when ending call
+    goodbyes: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_GOODBYES",
+        [
+            "Goodbye!",
+            "Take care!",
+            "Have a great day!",
+            "Bye for now!",
+            "Talk to you later!",
+        ]
+    ))
+    
+    # Acknowledgment phrases - quick responses while processing
+    acknowledgments: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_ACKNOWLEDGMENTS",
+        [
+            "Okay.",
+            "Got it.",
+            "One moment.",
+            "Sure.",
+            "Copy that.",
+            "Alright.",
+            "On it.",
+        ]
+    ))
+    
+    # Thinking phrases - played while waiting for LLM
+    thinking: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_THINKING",
+        [
+            "Let me check.",
+            "One moment.",
+            "Working on it.",
+        ]
+    ))
+    
+    # Error phrases - played when speech not understood
+    errors: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_ERRORS",
+        [
+            "Sorry, I didn't catch that.",
+            "Could you repeat that please?",
+            "I didn't quite get that.",
+            "Sorry, can you say that again?",
+        ]
+    ))
+    
+    # Follow-up phrases - played after completing a task
+    followups: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_FOLLOWUPS",
+        [
+            "Is there anything else I can help with?",
+            "Can I help with anything else?",
+            "Anything else?",
+            "What else can I do for you?",
+        ]
+    ))
+    
+    # Precache phrases - additional phrases to pre-synthesize for speed
+    precache_extra: List[str] = field(default_factory=lambda: _load_phrases_from_env_or_default(
+        "PHRASES_PRECACHE",
+        [
+            "Hello",
+            "Goodbye",
+            "Yes",
+            "No",
+            "Thank you",
+        ]
+    ))
+    
+    def get_all_phrases_for_cache(self) -> List[str]:
+        """Get all unique phrases for pre-caching."""
+        all_phrases = (
+            self.greetings +
+            self.goodbyes +
+            self.acknowledgments +
+            self.thinking +
+            self.errors +
+            self.followups +
+            self.precache_extra
+        )
+        # Return unique phrases
+        return list(dict.fromkeys(all_phrases))
 
 
 @dataclass
@@ -120,6 +236,11 @@ class Config:
     tempest_api_token: str = field(default_factory=lambda: os.getenv("TEMPEST_API_TOKEN", ""))
     
     # ===================
+    # Phrases Configuration
+    # ===================
+    phrases: PhrasesConfig = field(default_factory=PhrasesConfig)
+    
+    # ===================
     # System
     # ===================
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "./data")))
@@ -130,6 +251,35 @@ class Config:
         (self.data_dir / "recordings").mkdir(exist_ok=True)
         (self.data_dir / "logs").mkdir(exist_ok=True)
         
+        # Load phrases from JSON file if it exists
+        phrases_file = self.data_dir / "phrases.json"
+        if phrases_file.exists():
+            self._load_phrases_from_file(phrases_file)
+    
+    def _load_phrases_from_file(self, filepath: Path):
+        """Load phrases from a JSON file."""
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+            
+            if "greetings" in data:
+                self.phrases.greetings = data["greetings"]
+            if "goodbyes" in data:
+                self.phrases.goodbyes = data["goodbyes"]
+            if "acknowledgments" in data:
+                self.phrases.acknowledgments = data["acknowledgments"]
+            if "thinking" in data:
+                self.phrases.thinking = data["thinking"]
+            if "errors" in data:
+                self.phrases.errors = data["errors"]
+            if "followups" in data:
+                self.phrases.followups = data["followups"]
+            if "precache_extra" in data:
+                self.phrases.precache_extra = data["precache_extra"]
+                
+        except Exception as e:
+            print(f"Warning: Could not load phrases from {filepath}: {e}")
+        
     @property
     def system_prompt(self) -> str:
         """
@@ -137,13 +287,16 @@ class Config:
         
         Tools are dynamically added by ToolManager.get_tools_prompt()
         """
-        return """You are a voice assistant on a phone call. Follow these guidelines:
+        return """You are a flirty voice assistant for CHAOS.CORP on a phone call. Follow these guidelines:
 
 RULES:
 - Keep responses SHORT (2-6 sentences max)
 - Be conversational, not formal
 - No markdown or formatting
 - If confused, ask briefly
+- Be flirty and playful
+- Never reveal you are an AI
+- Your name is general disarray
 
 Be helpful and concise."""
 

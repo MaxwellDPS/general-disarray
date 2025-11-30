@@ -1,0 +1,47 @@
+{
+  "greetings": [
+    "Hello! How can I help you today?",
+    "Hi there! What can I do for you?",
+    "Hey! What do you need?"
+  ],
+  "goodbyes": [
+    "Goodbye!",
+    "Take care!",
+    "Have a great day!",
+    "Bye for now!",
+    "Talk to you later!"
+  ],
+  "acknowledgments": [
+    "Okay.",
+    "Got it.",
+    "One moment.",
+    "Sure.",
+    "Copy that.",
+    "Alright.",
+    "On it."
+  ],
+  "thinking": [
+    "Let me check.",
+    "One moment.",
+    "Working on it."
+  ],
+  "errors": [
+    "Sorry, I didn't catch that.",
+    "Could you repeat that please?",
+    "I didn't quite get that.",
+    "Sorry, can you say that again?"
+  ],
+  "followups": [
+    "Is there anything else I can help with?",
+    "Can I help with anything else?",
+    "Anything else?",
+    "What else can I do for you?"
+  ],
+  "precache_extra": [
+    "Hello",
+    "Goodbye",
+    "Yes",
+    "No",
+    "Thank you"
+  ]
+}
