@@ -4,3 +4,6 @@
 [submodule "nvitop"]
 	path = nvitop
 	url = https://github.com/MaxwellDPS/nvitop
+[submodule "speaches"]
+	path = speaches
+	url = https://github.com/speaches-ai/speaches.git
