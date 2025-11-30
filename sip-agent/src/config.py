@@ -52,10 +52,20 @@ class Config:
     # ===================
     speaches_api_url: str = field(default_factory=lambda: os.getenv("SPEACHES_API_URL", "http://localhost:8001"))
     
+    # STT Mode: "realtime" (WebRTC streaming) or "batch" (file upload)
+    # Realtime mode provides lower latency via WebRTC streaming
+    stt_mode: str = field(default_factory=lambda: os.getenv("STT_MODE", "realtime"))
+    
     # STT (Whisper) settings
     whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-small.en"))
     whisper_language: str = field(default_factory=lambda: os.getenv("WHISPER_LANGUAGE", "en"))
     whisper_response_format: str = "json"
+    
+    # WebRTC Realtime settings
+    webrtc_ice_servers: list = field(default_factory=lambda: [
+        {"urls": os.getenv("WEBRTC_STUN_SERVER", "stun:stun.l.google.com:19302")}
+    ])
+    webrtc_audio_codec: str = field(default_factory=lambda: os.getenv("WEBRTC_AUDIO_CODEC", "opus"))
     
     # TTS settings (Piper/Kokoro via Speaches)
     # Default to Kokoro which is well-supported by Speaches
@@ -70,6 +80,11 @@ class Config:
     def whisper_api_url(self) -> str:
         """Alias for backward compatibility."""
         return self.speaches_api_url
+    
+    @property
+    def use_realtime_stt(self) -> bool:
+        """Whether to use WebRTC realtime streaming for STT."""
+        return self.stt_mode.lower() == "realtime"
     
     # ===================
     # LLM Configuration

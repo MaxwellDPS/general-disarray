@@ -143,8 +143,59 @@
       "type": "stat"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 5 },
+      "id": 7,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum(sip_calls_active) or vector(0)", "refId": "A" }],
+      "title": "Active Calls",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 5 },
+      "id": 8,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum(increase(sip_calls_silence_timeout_total[1h])) or vector(0)", "refId": "A" }],
+      "title": "Silence Timeouts (1h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 3 }, { "color": "red", "value": 10 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 5 },
+      "id": 9,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum(increase(sip_llm_errors_total[1h])) or vector(0)", "refId": "A" }],
+      "title": "LLM Errors (1h)",
+      "type": "stat"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
       "id": 101,
       "panels": [],
       "title": "💬 Conversation Log",
@@ -152,7 +203,7 @@
     },
     {
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
       "id": 10,
       "options": {
         "dedupStrategy": "none",
@@ -165,7 +216,7 @@
         "wrapLogMessage": true
       },
       "targets": [{
-        "expr": "{service_name=\"sip-agent\"}   | event_type =~ `user_speech|assistant_response|assistant_ack` | line_format `{{if eq .event_type \"user_speech\"}}🎤 User: {{.event_data_text}}{{else if eq .event_type \"assistant_response\"}}🤖 Assistant: {{.event_data_text}}{{else if eq .event_type \"assistant_ack\"}}💬 Ack: {{.event_data_text}}{{end}}`",
+        "expr": "{service_name=\"sip-agent\"} | json | event_type =~ `user_speech|assistant_response|assistant_ack|tool_call` | line_format `{{if eq .event_type \"user_speech\"}}🎤 User: {{.event_data_text}}{{else if eq .event_type \"assistant_response\"}}🤖 Assistant: {{.event_data_text}}{{else if eq .event_type \"assistant_ack\"}}💬 Ack: {{.event_data_text}}{{else if eq .event_type \"tool_call\"}}🔧 Tool: {{.event_data_tool}}({{.event_data_params}}){{end}}`",
         "refId": "A"
       }],
       "title": "Conversation Transcript",
@@ -194,7 +245,7 @@
         "wrapLogMessage": true
       },
       "targets": [{
-        "expr": "{service_name=\"sip-agent\"} |~ \"Call received|Call ended|Outbound call|call_timeout\"",
+        "expr": "{service_name=\"sip-agent\"} |~ \"call_start|call_end|sip_call_state|sip_registration|sip_incoming_call|sip_outbound_call|sip_call_connected|call_timeout\"",
         "refId": "A"
       }],
       "title": "Call Events",
@@ -344,8 +395,27 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 40 },
+      "id": 35,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(sip_tts_characters_bucket[5m])) by (le))", "legendFormat": "Characters p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(sip_tts_characters_bucket[5m])) by (le))", "legendFormat": "Characters p95", "refId": "B" }
+      ],
+      "title": "TTS Characters per Request",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
       "id": 104,
       "panels": [],
       "title": "🧠 LLM Performance",
@@ -360,7 +430,7 @@
           "unit": "ms"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 41 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 47 },
       "id": 40,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -380,7 +450,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 41 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 47 },
       "id": 41,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -399,7 +469,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 47 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 53 },
       "id": 42,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -418,7 +488,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 47 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 53 },
       "id": 43,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -428,8 +498,26 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 59 },
+      "id": 44,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (error_type, llm_model) (rate(sip_llm_errors_total[5m]))", "legendFormat": "{{llm_model}}: {{error_type}}", "refId": "A" }
+      ],
+      "title": "LLM Errors",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 65 },
       "id": 105,
       "panels": [],
       "title": "🔧 Tools",
@@ -444,7 +532,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 54 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 66 },
       "id": 50,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -462,7 +550,7 @@
           "unit": "ms"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 54 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 66 },
       "id": 51,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -481,7 +569,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 60 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 72 },
       "id": 52,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -492,7 +580,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 66 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 78 },
       "id": 106,
       "panels": [],
       "title": "💬 Conversation Quality",
@@ -507,7 +595,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 67 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 79 },
       "id": 60,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -526,7 +614,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 67 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 79 },
       "id": 61,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -538,7 +626,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 73 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 85 },
       "id": 107,
       "panels": [],
       "title": "📋 Queue & Callbacks",
@@ -553,7 +641,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 74 },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 86 },
       "id": 70,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -571,7 +659,7 @@
           "unit": "ms"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 74 },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 86 },
       "id": 71,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -589,7 +677,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 74 },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 86 },
       "id": 72,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -608,7 +696,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 80 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 92 },
       "id": 73,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -621,7 +709,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 86 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 98 },
       "id": 108,
       "panels": [],
       "title": "🗺️ Service Map",
@@ -629,7 +717,7 @@
     },
     {
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 87 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 99 },
       "id": 80,
       "options": {},
       "targets": [{
@@ -641,7 +729,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 95 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 107 },
       "id": 109,
       "panels": [],
       "title": "⚠️ System Logs",
@@ -649,7 +737,7 @@
     },
     {
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 96 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
       "id": 90,
       "options": {
         "dedupStrategy": "none",
@@ -670,7 +758,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 104 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 116 },
       "id": 110,
       "panels": [],
       "title": "📜 All Logs (Raw)",
@@ -678,7 +766,7 @@
     },
     {
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 105 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 117 },
       "id": 91,
       "options": {
         "dedupStrategy": "none",
@@ -699,7 +787,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 115 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 127 },
       "id": 111,
       "panels": [],
       "title": "📊 Available Metrics (Debug)",
@@ -715,7 +803,7 @@
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 116 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 128 },
       "id": 92,
       "options": {
         "cellHeight": "sm",

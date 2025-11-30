@@ -31,8 +31,19 @@ except ImportError:
     print("WARNING: pjsua2 not available, using mock SIP handler")
 
 from config import Config
+from telemetry import create_span, Metrics
 
 logger = logging.getLogger(__name__)
+
+
+def log_event(log, level, msg, event=None, **data):
+    """Helper to log structured events."""
+    extra = {}
+    if event:
+        extra['event_type'] = event
+    if data:
+        extra['event_data'] = data
+    log.log(level, msg, extra=extra)
 
 
 # ============================================================================
@@ -111,11 +122,16 @@ class SIPCall(pj.Call if PJSUA_AVAILABLE else object):
     def onCallState(self, prm):
         """Called when call state changes (PJSIP thread)."""
         ci = self.getInfo()
-        logger.info(f"Call state: {ci.stateText}")
+        log_event(logger, logging.INFO, f"Call state: {ci.stateText}",
+                 event="sip_call_state", state=ci.stateText, call_id=str(ci.callIdString))
         
         if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
             if self.call_info:
                 self.call_info.is_active = True
+                # Record call setup time
+                setup_time_ms = (time.time() - self.call_info.start_time) * 1000
+                log_event(logger, logging.INFO, f"Call connected in {setup_time_ms:.0f}ms",
+                         event="sip_call_connected", setup_time_ms=setup_time_ms)
                 
         elif ci.state == pj.PJSIP_INV_STATE_DISCONNECTED:
             if self.call_info:
@@ -194,19 +210,22 @@ class SIPAccount(pj.Account if PJSUA_AVAILABLE else object):
     def onRegState(self, prm):
         """Called when registration state changes."""
         ai = self.getInfo()
-        logger.info(f"Registration state: {ai.regStatusText} (code={ai.regStatus})")
+        log_event(logger, logging.INFO, f"Registration state: {ai.regStatusText} (code={ai.regStatus})",
+                 event="sip_registration", status=ai.regStatusText, code=ai.regStatus)
         
         if ai.regStatus == 200:
             logger.info(f"✓ Registered: {ai.uri}")
             self.handler._registered.set()
         elif ai.regStatus >= 400:
             logger.error(f"✗ Registration failed: {ai.regStatusText}")
+            Metrics.record_call_failed("registration", f"sip_{ai.regStatus}")
             
     def onIncomingCall(self, prm):
         """Called for incoming calls (PJSIP thread)."""
         call = SIPCall(self, prm.callId, self.handler)
         ci = call.getInfo()
-        logger.info(f"Incoming call from: {ci.remoteUri}")
+        log_event(logger, logging.INFO, f"Incoming call from: {ci.remoteUri}",
+                 event="sip_incoming_call", remote_uri=ci.remoteUri, call_id=str(prm.callId))
         
         call_info = CallInfo(
             call_id=str(prm.callId),
@@ -839,12 +858,14 @@ class SIPHandler:
             call.makeCall(uri, prm)
             
             self.active_calls[call_info.call_id] = call
-            logger.info(f"Outbound call initiated: {uri}")
+            log_event(logger, logging.INFO, f"Outbound call initiated: {uri}",
+                     event="sip_outbound_call", uri=uri, call_id=call_info.call_id)
             
             return call_info
             
         except Exception as e:
             logger.error(f"Make call error: {e}")
+            Metrics.record_call_failed("outbound", "sip_error")
             return None
             
     async def receive_audio(self, call_info: CallInfo, timeout: float = 0.1) -> Optional[bytes]:

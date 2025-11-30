@@ -33,6 +33,11 @@ connectors:
       - name: http.method
       - name: http.status_code
       - name: http.route
+      - name: tool.name
+      - name: llm.model
+      - name: stt.model
+      - name: tts.model
+      - name: call.type
     exemplars:
       enabled: true
 

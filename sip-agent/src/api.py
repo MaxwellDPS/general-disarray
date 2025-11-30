@@ -14,7 +14,7 @@ from enum import Enum
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field, model_validator
 
-from telemetry import Metrics
+from telemetry import create_span, Metrics
 
 if TYPE_CHECKING:
     from main import SIPAIAssistant
@@ -147,122 +147,140 @@ class OutboundCallHandler:
         choice_raw_text = None
         error = None
         
-        try:
-            # Build SIP URI
-            extension = request.extension
-            if not extension.startswith('sip:'):
-                if '@' not in extension:
-                    extension = f"sip:{extension}@{self.assistant.config.sip_domain}"
+        with create_span("api.execute_call", {
+            "call.id": call_id,
+            "call.extension": request.extension,
+            "call.has_choice": request.choice is not None
+        }) as span:
+            try:
+                # Build SIP URI
+                extension = request.extension
+                if not extension.startswith('sip:'):
+                    if '@' not in extension:
+                        extension = f"sip:{extension}@{self.assistant.config.sip_domain}"
+                    else:
+                        extension = f"sip:{extension}"
+                
+                span.set_attribute("call.sip_uri", extension)
+                log_event(logger, logging.INFO, f"Making call to {extension}",
+                         event="outbound_call_dialing", call_id=call_id, uri=extension)
+                
+                # Pre-generate TTS for message
+                message_audio = await self.assistant.audio_pipeline.synthesize(request.message)
+                if not message_audio:
+                    raise Exception("Failed to generate TTS for message")
+                
+                # Pre-generate TTS for choice prompt if needed
+                choice_audio = None
+                if request.choice:
+                    choice_audio = await self.assistant.audio_pipeline.synthesize(request.choice.prompt)
+                
+                # Make the call
+                call_info = await self.assistant.sip_handler.make_call(extension)
+                if not call_info:
+                    status = CallStatus.FAILED
+                    error = "Failed to initiate call"
+                    span.set_attribute("call.error", error)
+                    Metrics.record_call_failed("outbound", "initiate_failed")
+                    raise Exception(error)
+                
+                status = CallStatus.RINGING
+                span.set_attribute("call.status", "ringing")
+                
+                # Wait for answer
+                ring_start = asyncio.get_event_loop().time()
+                while asyncio.get_event_loop().time() - ring_start < request.ring_timeout:
+                    if getattr(call_info, 'is_active', False):
+                        status = CallStatus.ANSWERED
+                        span.set_attribute("call.status", "answered")
+                        break
+                    await asyncio.sleep(0.5)
                 else:
-                    extension = f"sip:{extension}"
-            
-            log_event(logger, logging.INFO, f"Making call to {extension}",
-                     event="outbound_call_dialing", call_id=call_id, uri=extension)
-            
-            # Pre-generate TTS for message
-            message_audio = await self.assistant.audio_pipeline.synthesize(request.message)
-            if not message_audio:
-                raise Exception("Failed to generate TTS for message")
-            
-            # Pre-generate TTS for choice prompt if needed
-            choice_audio = None
-            if request.choice:
-                choice_audio = await self.assistant.audio_pipeline.synthesize(request.choice.prompt)
-            
-            # Make the call
-            call_info = await self.assistant.sip_handler.make_call(extension)
-            if not call_info:
-                status = CallStatus.FAILED
-                error = "Failed to initiate call"
-                raise Exception(error)
-            
-            status = CallStatus.RINGING
-            
-            # Wait for answer
-            ring_start = asyncio.get_event_loop().time()
-            while asyncio.get_event_loop().time() - ring_start < request.ring_timeout:
-                if getattr(call_info, 'is_active', False):
-                    status = CallStatus.ANSWERED
-                    break
-                await asyncio.sleep(0.5)
-            else:
-                status = CallStatus.NO_ANSWER
-                log_event(logger, logging.WARNING, f"Call not answered within {request.ring_timeout}s",
-                         event="outbound_call_no_answer", call_id=call_id)
-                await self.assistant.sip_handler.hangup_call(call_info)
-                raise Exception("Call not answered")
-            
-            log_event(logger, logging.INFO, "Call answered",
-                     event="outbound_call_answered", call_id=call_id)
-            
-            # Wait for media to be ready
-            await asyncio.sleep(1)
-            
-            # Play the message
-            await self.assistant.sip_handler.send_audio(call_info, message_audio)
-            audio_duration = len(message_audio) / (self.assistant.config.sample_rate * 2)
-            await asyncio.sleep(audio_duration + 0.5)
-            message_played = True
-            
-            log_event(logger, logging.INFO, "Message played",
-                     event="outbound_call_message_played", call_id=call_id)
-            
-            # Handle choice collection if configured
-            if request.choice and choice_audio:
-                choice_response, choice_raw_text = await self._collect_choice(
-                    call_id, call_info, request.choice, choice_audio
-                )
+                    status = CallStatus.NO_ANSWER
+                    span.set_attribute("call.status", "no_answer")
+                    log_event(logger, logging.WARNING, f"Call not answered within {request.ring_timeout}s",
+                             event="outbound_call_no_answer", call_id=call_id)
+                    Metrics.record_call_failed("outbound", "no_answer")
+                    await self.assistant.sip_handler.hangup_call(call_info)
+                    raise Exception("Call not answered")
                 
-                log_event(logger, logging.INFO, f"Choice collected: {choice_response}",
-                         event="outbound_call_choice_collected", call_id=call_id, 
-                         response=choice_response, raw_text=choice_raw_text)
+                log_event(logger, logging.INFO, "Call answered",
+                         event="outbound_call_answered", call_id=call_id)
                 
-                # Play acknowledgment if choice was matched
-                if choice_response and call_info.is_active:
-                    try:
-                        ack_audio = await self.assistant.audio_pipeline.synthesize("Acknowledged.")
-                        if ack_audio:
-                            await self.assistant.sip_handler.send_audio(call_info, ack_audio)
-                            ack_duration = len(ack_audio) / (self.assistant.config.sample_rate * 2)
-                            await asyncio.sleep(ack_duration + 0.3)
-                            log_event(logger, logging.INFO, "Acknowledgment played",
-                                     event="outbound_call_ack_played", call_id=call_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to play acknowledgment: {e}")
-            
-            status = CallStatus.COMPLETED
-            
-            # Hang up
-            if call_info.is_active:
-                await self.assistant.sip_handler.hangup_call(call_info)
+                # Wait for media to be ready
+                await asyncio.sleep(1)
                 
-        except Exception as e:
-            error = str(e)
-            logger.error(f"Outbound call error: {e}", exc_info=True)
-            
-        finally:
-            # Clean up
-            if call_id in self.pending_calls:
-                del self.pending_calls[call_id]
-            
-            # Calculate duration
-            duration = asyncio.get_event_loop().time() - start_time
-            
-            # Send webhook if callback_url provided
-            if request.callback_url:
-                await self._send_webhook(
-                    request.callback_url,
-                    WebhookPayload(
-                        call_id=call_id,
-                        status=status,
-                        extension=request.extension,
-                        duration_seconds=round(duration, 2),
-                        message_played=message_played,
-                        choice_response=choice_response,
-                        choice_raw_text=choice_raw_text,
-                        error=error
+                # Play the message
+                await self.assistant.sip_handler.send_audio(call_info, message_audio)
+                audio_duration = len(message_audio) / (self.assistant.config.sample_rate * 2)
+                await asyncio.sleep(audio_duration + 0.5)
+                message_played = True
+                span.set_attribute("call.message_played", True)
+                
+                log_event(logger, logging.INFO, "Message played",
+                         event="outbound_call_message_played", call_id=call_id)
+                
+                # Handle choice collection if configured
+                if request.choice and choice_audio:
+                    choice_response, choice_raw_text = await self._collect_choice(
+                        call_id, call_info, request.choice, choice_audio
                     )
-                )
+                    
+                    span.set_attribute("call.choice_response", choice_response or "none")
+                    log_event(logger, logging.INFO, f"Choice collected: {choice_response}",
+                             event="outbound_call_choice_collected", call_id=call_id, 
+                             response=choice_response, raw_text=choice_raw_text)
+                    
+                    # Play acknowledgment if choice was matched
+                    if choice_response and call_info.is_active:
+                        try:
+                            ack_audio = await self.assistant.audio_pipeline.synthesize("Acknowledged.")
+                            if ack_audio:
+                                await self.assistant.sip_handler.send_audio(call_info, ack_audio)
+                                ack_duration = len(ack_audio) / (self.assistant.config.sample_rate * 2)
+                                await asyncio.sleep(ack_duration + 0.3)
+                                log_event(logger, logging.INFO, "Acknowledgment played",
+                                         event="outbound_call_ack_played", call_id=call_id)
+                        except Exception as e:
+                            logger.warning(f"Failed to play acknowledgment: {e}")
+                
+                status = CallStatus.COMPLETED
+                span.set_attribute("call.status", "completed")
+                
+                # Hang up
+                if call_info.is_active:
+                    await self.assistant.sip_handler.hangup_call(call_info)
+                    
+            except Exception as e:
+                error = str(e)
+                logger.error(f"Outbound call error: {e}", exc_info=True)
+                span.record_exception(e)
+                span.set_attribute("call.error", error)
+                
+            finally:
+                # Clean up
+                if call_id in self.pending_calls:
+                    del self.pending_calls[call_id]
+                
+                # Calculate duration
+                duration = asyncio.get_event_loop().time() - start_time
+                span.set_attribute("call.duration_s", round(duration, 2))
+                
+                # Send webhook if callback_url provided
+                if request.callback_url:
+                    await self._send_webhook(
+                        request.callback_url,
+                        WebhookPayload(
+                            call_id=call_id,
+                            status=status,
+                            extension=request.extension,
+                            duration_seconds=round(duration, 2),
+                            message_played=message_played,
+                            choice_response=choice_response,
+                            choice_raw_text=choice_raw_text,
+                            error=error
+                        )
+                    )
             
     async def _collect_choice(
         self, 
@@ -352,28 +370,48 @@ class OutboundCallHandler:
         
     async def _send_webhook(self, url: str, payload: WebhookPayload):
         """Send result to callback webhook."""
-        try:
-            log_event(logger, logging.INFO, f"Sending webhook to {url}",
-                     event="outbound_call_webhook", url=url, status=payload.status)
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    url,
-                    json=payload.model_dump(),
-                    headers={"Content-Type": "application/json"}
-                )
-                response.raise_for_status()
+        with create_span("api.send_webhook", {
+            "webhook.url": url,
+            "webhook.call_id": payload.call_id,
+            "webhook.status": payload.status.value
+        }) as span:
+            try:
+                log_event(logger, logging.INFO, f"Sending webhook to {url}",
+                         event="outbound_call_webhook", url=url, status=payload.status)
                 
-            log_event(logger, logging.INFO, f"Webhook sent successfully",
-                     event="outbound_call_webhook_success", url=url)
-            
-            # Record success metric
-            Metrics.record_callback_success()
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        url,
+                        json=payload.model_dump(),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    response.raise_for_status()
+                    
+                span.set_attribute("webhook.success", True)
+                span.set_attribute("http.status_code", response.status_code)
+                log_event(logger, logging.INFO, f"Webhook sent successfully",
+                         event="outbound_call_webhook_success", url=url)
                 
-        except Exception as e:
-            logger.error(f"Failed to send webhook to {url}: {e}")
-            # Record failure metric
-            Metrics.record_callback_failed(type(e).__name__)
+                # Record success metric
+                Metrics.record_callback_success()
+                    
+            except httpx.TimeoutException as e:
+                logger.error(f"Webhook timeout to {url}: {e}")
+                span.set_attribute("webhook.success", False)
+                span.set_attribute("error.type", "timeout")
+                Metrics.record_callback_failed("timeout")
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Webhook HTTP error to {url}: {e}")
+                span.set_attribute("webhook.success", False)
+                span.set_attribute("http.status_code", e.response.status_code)
+                span.record_exception(e)
+                Metrics.record_callback_failed(f"http_{e.response.status_code}")
+            except Exception as e:
+                logger.error(f"Failed to send webhook to {url}: {e}")
+                span.set_attribute("webhook.success", False)
+                span.record_exception(e)
+                # Record failure metric
+                Metrics.record_callback_failed(type(e).__name__)
 
 
 # ============================================================================

@@ -6,6 +6,7 @@ Includes timer, callback, and extensible tool framework.
 """
 
 import json
+import time
 import uuid
 import asyncio
 import logging
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from main import SIPAIAssistant
 
 from config import Config
+from telemetry import create_span, Metrics
 
 logger = logging.getLogger(__name__)
 
@@ -505,6 +507,7 @@ class ToolManager:
     async def execute_tool(self, tool_call) -> ToolResult:
         """Execute a tool call with interception."""
         tool_name = tool_call.name.upper()
+        start_time = time.time()
         
         # Log tool invocation (convert params to simple dict for JSON)
         try:
@@ -514,61 +517,93 @@ class ToolManager:
         log_event(logger, logging.INFO, f"Tool called: {tool_name}",
                  event="tool_call", tool=tool_name, params=params_dict)
         
+        # Record tool call metric
+        Metrics.record_tool_call(tool_name)
+        
         if tool_name not in self.tools:
+            Metrics.record_tool_error(tool_name, "unknown_tool")
             return ToolResult(status=ToolStatus.FAILED, message=f"Unknown tool: {tool_name}")
             
         tool = self.tools[tool_name]
         if not tool.enabled:
+            Metrics.record_tool_error(tool_name, "disabled")
             return ToolResult(status=ToolStatus.FAILED, message=f"Tool {tool_name} disabled")
 
         # Validate base params (delay, message)
         error = tool.validate_params(tool_call.params)
         if error:
+            Metrics.record_tool_error(tool_name, "validation_error")
             return ToolResult(status=ToolStatus.FAILED, message=error)
             
-        try:
-            # --- INTERCEPT CALLBACK TOOL ---
-            # Handle callback manually to ensure caller's number is used by default
-            if tool_name == "CALLBACK":
-                delay = int(tool_call.params.get("delay", 60))
-                message = tool_call.params.get("message", "This is your scheduled callback")
-                destination = tool_call.params.get("destination") or tool_call.params.get("uri")
-                
-                # Sanitize destination
-                if destination:
-                    destination = str(destination).strip()
-                
-                # Use caller's number if not specified or if explicitly "CALLER_NUMBER"
-                if not destination or destination.upper() == "CALLER_NUMBER":
-                    if self.assistant.current_call:
-                        destination = getattr(self.assistant.current_call, 'remote_uri', None)
-                        logger.info(f"Using caller's number for callback: {destination}")
-                    if not destination:
-                        return ToolResult(
-                            status=ToolStatus.FAILED,
-                            message="No callback number available - please specify a number"
-                        )
-                
-                logger.debug(f"Processing CALLBACK: delay={delay}, dest={destination}")
-                
-                # Schedule the callback
-                await self.assistant.schedule_callback(delay, message, destination)
-                
-                return ToolResult(
-                    status=ToolStatus.SUCCESS,
-                    message=f"I'll call you back in {self._format_delay(delay)}"
-                )
-            # -------------------------------
+        with create_span(f"tool.{tool_name.lower()}", {
+            "tool.name": tool_name,
+            "tool.params": str(params_dict)
+        }) as span:
+            try:
+                # --- INTERCEPT CALLBACK TOOL ---
+                # Handle callback manually to ensure caller's number is used by default
+                if tool_name == "CALLBACK":
+                    delay = int(tool_call.params.get("delay", 60))
+                    message = tool_call.params.get("message", "This is your scheduled callback")
+                    destination = tool_call.params.get("destination") or tool_call.params.get("uri")
+                    
+                    # Sanitize destination
+                    if destination:
+                        destination = str(destination).strip()
+                    
+                    # Use caller's number if not specified or if explicitly "CALLER_NUMBER"
+                    if not destination or destination.upper() == "CALLER_NUMBER":
+                        if self.assistant.current_call:
+                            destination = getattr(self.assistant.current_call, 'remote_uri', None)
+                            logger.info(f"Using caller's number for callback: {destination}")
+                        if not destination:
+                            latency_ms = (time.time() - start_time) * 1000
+                            Metrics.record_tool_latency(latency_ms, tool_name)
+                            Metrics.record_tool_error(tool_name, "no_callback_number")
+                            span.set_attribute("tool.error", "no_callback_number")
+                            return ToolResult(
+                                status=ToolStatus.FAILED,
+                                message="No callback number available - please specify a number"
+                            )
+                    
+                    logger.debug(f"Processing CALLBACK: delay={delay}, dest={destination}")
+                    
+                    # Schedule the callback
+                    await self.assistant.schedule_callback(delay, message, destination)
+                    
+                    latency_ms = (time.time() - start_time) * 1000
+                    Metrics.record_tool_latency(latency_ms, tool_name)
+                    span.set_attribute("tool.latency_ms", latency_ms)
+                    span.set_attribute("tool.status", "success")
+                    
+                    return ToolResult(
+                        status=ToolStatus.SUCCESS,
+                        message=f"I'll call you back in {self._format_delay(delay)}"
+                    )
+                # -------------------------------
 
-            # For other tools, run normally
-            result = await tool.execute(tool_call.params)
-            return result
-            
-        except Exception as e:
-            logger.error(f"Tool execution error: {e}")
-            import traceback
-            traceback.print_exc()
-            return ToolResult(status=ToolStatus.FAILED, message=str(e))
+                # For other tools, run normally
+                result = await tool.execute(tool_call.params)
+                
+                latency_ms = (time.time() - start_time) * 1000
+                Metrics.record_tool_latency(latency_ms, tool_name)
+                span.set_attribute("tool.latency_ms", latency_ms)
+                span.set_attribute("tool.status", result.status.value)
+                
+                if result.status == ToolStatus.FAILED:
+                    Metrics.record_tool_error(tool_name, "execution_failed")
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"Tool execution error: {e}")
+                import traceback
+                traceback.print_exc()
+                latency_ms = (time.time() - start_time) * 1000
+                Metrics.record_tool_latency(latency_ms, tool_name)
+                Metrics.record_tool_error(tool_name, type(e).__name__)
+                span.record_exception(e)
+                return ToolResult(status=ToolStatus.FAILED, message=str(e))
             
     async def schedule_task(
         self,

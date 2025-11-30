@@ -131,6 +131,9 @@ class FastVoiceActivityDetector:
         if is_speech:
             self.speech_frames.append(audio_chunk)
             self.silence_frames = 0
+            if not self.is_speaking:
+                # Speech just started - record VAD event
+                Metrics.record_vad_speech_segment()
             self.is_speaking = True
         else:
             self.silence_frames += 1
@@ -238,12 +241,17 @@ class WhisperAPIClient:
         """
         if not self.available or not self.client:
             logger.warning("Whisper API not available")
+            Metrics.record_stt_error(self.model, "api_unavailable")
             return ""
+        
+        # Calculate audio duration for metrics
+        audio_duration_s = len(audio_data) / (self.config.sample_rate * 2)  # 16-bit audio = 2 bytes per sample
         
         with create_span("stt.transcribe", {
             "stt.model": self.model,
             "stt.language": self.language,
-            "audio.bytes": len(audio_data)
+            "audio.bytes": len(audio_data),
+            "audio.duration_s": audio_duration_s
         }) as span:
             start_time = time.time()
             try:
@@ -275,19 +283,36 @@ class WhisperAPIClient:
                 if response.status_code == 200:
                     result = response.json()
                     text = result.get('text', '').strip()
+                    
+                    # Record metrics
                     span.set_attribute("stt.text_length", len(text))
                     span.set_attribute("stt.latency_ms", latency_ms)
                     Metrics.record_stt_latency(latency_ms, self.model)
+                    Metrics.record_stt_audio_duration(audio_duration_s)
+                    
+                    # Record confidence if available (Whisper API may not always provide this)
+                    if 'confidence' in result:
+                        confidence = result.get('confidence', 1.0)
+                        Metrics.record_stt_confidence(confidence, self.model)
+                        span.set_attribute("stt.confidence", confidence)
+                    
                     return text
                 else:
                     logger.error(f"Whisper API error: {response.status_code} - {response.text}")
                     span.set_attribute("error", True)
                     span.set_attribute("http.status_code", response.status_code)
+                    Metrics.record_stt_error(self.model, f"http_{response.status_code}")
                     return ""
                     
+            except asyncio.TimeoutError:
+                logger.error("STT request timeout")
+                Metrics.record_stt_error(self.model, "timeout")
+                span.set_attribute("error.type", "timeout")
+                return ""
             except Exception as e:
                 logger.error(f"Transcription error: {e}")
                 span.record_exception(e)
+                Metrics.record_stt_error(self.model, type(e).__name__)
                 return ""
 
 
@@ -473,6 +498,7 @@ class SpeachesTTSClient:
         Synthesize text using Speaches TTS API (OpenAI-compatible).
         """
         if not self.available or not self.client:
+            Metrics.record_tts_error(self.model, "api_unavailable")
             return b''
         
         with create_span("tts.synthesize", {
@@ -506,24 +532,36 @@ class SpeachesTTSClient:
                     if self.response_format == "wav" and audio_data[:4] == b'RIFF':
                         audio_data = self._extract_wav_data(audio_data)
                     
+                    # Calculate audio duration (16-bit mono at tts_sample_rate)
+                    audio_duration_s = len(audio_data) / (self.tts_sample_rate * 2)
+                    
                     span.set_attribute("tts.audio_bytes", len(audio_data))
+                    span.set_attribute("tts.audio_duration_s", audio_duration_s)
                     span.set_attribute("tts.latency_ms", latency_ms)
+                    
+                    # Record metrics
                     Metrics.record_tts_latency(latency_ms, self.model)
+                    Metrics.record_tts_characters(len(text), self.model)
+                    Metrics.record_tts_audio_duration(audio_duration_s, self.model)
+                    
                     return audio_data
                 else:
                     logger.error(f"TTS API error: {response.status_code} - {response.text}")
                     span.set_attribute("error", True)
                     span.set_attribute("http.status_code", response.status_code)
+                    Metrics.record_tts_error(self.model, f"http_{response.status_code}")
                     return b''
                     
             except asyncio.TimeoutError:
                 logger.warning("TTS response timeout")
                 span.set_attribute("error", True)
                 span.set_attribute("error.type", "timeout")
+                Metrics.record_tts_error(self.model, "timeout")
                 return b''
             except Exception as e:
                 logger.error(f"TTS synthesis error: {e}")
                 span.record_exception(e)
+                Metrics.record_tts_error(self.model, type(e).__name__)
                 return b''
             
     def _extract_wav_data(self, wav_bytes: bytes) -> bytes:
@@ -607,11 +645,15 @@ class LowLatencyAudioPipeline:
     """
     Low-latency audio pipeline using Speaches for both STT and TTS.
     
+    Supports two STT modes:
+    - "realtime": WebRTC streaming for lowest latency (default)
+    - "batch": Traditional file upload for compatibility
+    
     Target latencies:
-    - STT: < 300ms (via Whisper API)
+    - STT: < 200ms (realtime) / < 300ms (batch)
     - LLM TTFT: < 500ms  
     - TTS: < 150ms (Piper via Speaches)
-    - Total: < 950ms
+    - Total: < 850ms (realtime) / < 950ms (batch)
     """
     
     def __init__(self, config: Config):
@@ -619,36 +661,77 @@ class LowLatencyAudioPipeline:
         
         # Components
         self.vad = FastVoiceActivityDetector(config)
-        self.stt = WhisperAPIClient(config)
         self.tts = SpeachesTTSClient(config)
+        
+        # STT - use RealtimeSTTManager which handles mode selection
+        self._stt_manager = None  # Initialized in start()
+        self._stt_batch_client = None  # Fallback for when realtime unavailable
         
         # Audio buffer
         self.audio_buffer = bytearray()
         self.max_buffer_size = int(config.max_speech_duration_s * config.sample_rate * 2)
         
+        # Realtime mode state
+        self._realtime_transcription_callback = None
+        self._use_realtime = config.use_realtime_stt
+        
         # Metrics
         self.last_metrics = LatencyMetrics()
+        
+    @property
+    def stt(self):
+        """Get the active STT client for compatibility."""
+        if self._stt_manager:
+            return self._stt_manager
+        return self._stt_batch_client
         
     async def start(self):
         """Initialize all components."""
         logger.info("Starting low-latency audio pipeline...")
+        logger.info(f"STT mode: {self.config.stt_mode}")
         
         start = time.time()
         
-        # Initialize API clients in parallel
-        await asyncio.gather(
-            self.stt.initialize(),
-            self.tts.initialize()
-        )
+        # Try to initialize realtime STT if configured
+        if self._use_realtime:
+            try:
+                from realtime_client import RealtimeSTTManager
+                self._stt_manager = RealtimeSTTManager(self.config)
+                await self._stt_manager.initialize()
+                
+                if self._stt_manager.is_realtime:
+                    logger.info("Using WebRTC realtime STT mode")
+                else:
+                    logger.info("Realtime unavailable, using batch STT mode")
+            except ImportError as e:
+                logger.warning(f"Realtime client not available: {e}")
+                self._use_realtime = False
+            except Exception as e:
+                logger.warning(f"Failed to initialize realtime STT: {e}")
+                self._use_realtime = False
+                
+        # Fallback to batch mode if realtime not available
+        if not self._stt_manager or not self._stt_manager.available:
+            logger.info("Initializing batch STT client")
+            self._stt_batch_client = WhisperAPIClient(self.config)
+            await self._stt_batch_client.initialize()
+            
+        # Initialize TTS
+        await self.tts.initialize()
         
         load_time = (time.time() - start) * 1000
         logger.info(f"Pipeline ready in {load_time:.0f}ms")
         
-        if self.stt.available:
-            logger.info(f"Whisper API ready at {self.config.speaches_api_url}")
+        # Log STT status
+        if self._stt_manager and self._stt_manager.available:
+            mode_str = "realtime (WebRTC)" if self._stt_manager.is_realtime else "batch"
+            logger.info(f"STT ready in {mode_str} mode at {self.config.speaches_api_url}")
+        elif self._stt_batch_client and self._stt_batch_client.available:
+            logger.info(f"STT ready in batch mode at {self.config.speaches_api_url}")
         else:
-            logger.warning("Whisper API not available")
+            logger.warning("STT not available")
             
+        # Log TTS status
         if self.tts.available:
             logger.info(f"Speaches TTS ready, {len(self.tts.audio_cache)} phrases cached")
         else:
@@ -656,11 +739,33 @@ class LowLatencyAudioPipeline:
             
     async def stop(self):
         """Cleanup."""
-        await self.stt.close()
+        if self._stt_manager:
+            await self._stt_manager.close()
+        if self._stt_batch_client:
+            await self._stt_batch_client.close()
         await self.tts.close()
         
+    def set_realtime_transcription_callback(self, callback):
+        """
+        Set callback for realtime transcription results.
+        
+        In realtime mode, transcriptions can arrive asynchronously.
+        This callback is called with each transcription result.
+        """
+        self._realtime_transcription_callback = callback
+        if self._stt_manager and hasattr(self._stt_manager, 'set_transcription_callback'):
+            self._stt_manager.set_transcription_callback(callback)
+        
     async def process_audio(self, audio_chunk: bytes) -> Optional[str]:
-        """Process audio with fast end-of-utterance detection."""
+        """
+        Process audio with fast end-of-utterance detection.
+        
+        In realtime mode, audio is also streamed for continuous transcription.
+        """
+        # In realtime mode, push audio for streaming transcription
+        if self._stt_manager and self._stt_manager.is_realtime:
+            self._stt_manager.push_audio(audio_chunk)
+            
         is_speech, end_of_utterance = self.vad.process_audio(audio_chunk)
         
         if is_speech:
@@ -688,11 +793,21 @@ class LowLatencyAudioPipeline:
             return ""
             
         self.last_metrics.stt_start = time.time()
-        result = await self.stt.transcribe(audio_data)
+        
+        # Use the appropriate client
+        if self._stt_manager and self._stt_manager.available:
+            result = await self._stt_manager.transcribe(audio_data)
+        elif self._stt_batch_client and self._stt_batch_client.available:
+            result = await self._stt_batch_client.transcribe(audio_data)
+        else:
+            logger.error("No STT client available")
+            result = ""
+            
         self.last_metrics.stt_end = time.time()
         
         stt_latency = (self.last_metrics.stt_end - self.last_metrics.speech_end) * 1000
-        logger.info(f"STT API: {stt_latency:.0f}ms for {duration_ms:.0f}ms audio")
+        mode_str = "realtime" if (self._stt_manager and self._stt_manager.is_realtime) else "batch"
+        logger.info(f"STT ({mode_str}): {stt_latency:.0f}ms for {duration_ms:.0f}ms audio")
         
         return result
         

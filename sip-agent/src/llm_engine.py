@@ -167,6 +167,7 @@ class LLMEngine:
             "llm.max_tokens": self.config.llm_max_tokens
         }) as span:
             start_time = time.time()
+            first_token_time = None
             try:
                 response = await self.client.chat.completions.create(
                     model=self.config.llm_model,
@@ -176,7 +177,8 @@ class LLMEngine:
                     top_p=self.config.llm_top_p
                 )
                 
-                latency_ms = (time.time() - start_time) * 1000
+                end_time = time.time()
+                latency_ms = (end_time - start_time) * 1000
                 
                 # --- CRITICAL FIX ---
                 # gpt-oss-20b / vLLM can return None for content if it gets confused 
@@ -187,11 +189,26 @@ class LLMEngine:
                 span.set_attribute("llm.latency_ms", latency_ms)
                 span.set_attribute("llm.finish_reason", finish_reason or "unknown")
                 
-                # Record usage if available
+                # Record usage metrics if available
                 if hasattr(response, 'usage') and response.usage:
-                    span.set_attribute("llm.prompt_tokens", response.usage.prompt_tokens)
-                    span.set_attribute("llm.completion_tokens", response.usage.completion_tokens)
-                    span.set_attribute("llm.total_tokens", response.usage.total_tokens)
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    total_tokens = response.usage.total_tokens
+                    
+                    span.set_attribute("llm.prompt_tokens", prompt_tokens)
+                    span.set_attribute("llm.completion_tokens", completion_tokens)
+                    span.set_attribute("llm.total_tokens", total_tokens)
+                    
+                    # Record token metrics
+                    Metrics.record_llm_tokens_input(prompt_tokens, self.config.llm_model)
+                    Metrics.record_llm_tokens_output(completion_tokens, self.config.llm_model)
+                    Metrics.record_llm_context_tokens(total_tokens, self.config.llm_model)
+                    
+                    # Calculate tokens per second for output
+                    if completion_tokens > 0 and latency_ms > 0:
+                        tps = completion_tokens / (latency_ms / 1000)
+                        Metrics.record_llm_tokens_per_second(tps, self.config.llm_model)
+                        span.set_attribute("llm.tokens_per_second", tps)
                 
                 Metrics.record_llm_latency(latency_ms, self.config.llm_model)
                 
@@ -199,6 +216,7 @@ class LLMEngine:
                 if content is None or not content.strip():
                     logger.warning(f"LLM returned empty content. Reason: {finish_reason}")
                     span.set_attribute("llm.empty_response", True)
+                    Metrics.record_llm_error(self.config.llm_model, "empty_response")
                     
                     # If it ran out of tokens while thinking, we can't recover easily 
                     # without more tokens, so we give a polite error.
@@ -213,6 +231,7 @@ class LLMEngine:
             except Exception as e:
                 logger.error(f"LLM generation error: {e}")
                 span.record_exception(e)
+                Metrics.record_llm_error(self.config.llm_model, type(e).__name__)
                 return "I'm sorry, I'm having trouble processing that. Could you try again?"
             
     def _mock_response(self, messages: List[Dict[str, str]]) -> str:
