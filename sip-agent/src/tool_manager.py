@@ -23,18 +23,9 @@ if TYPE_CHECKING:
 
 from config import Config
 from telemetry import create_span, Metrics
+from logging_utils import log_event, format_duration, HANGUP_DELAY_SECONDS
 
 logger = logging.getLogger(__name__)
-
-
-def log_event(log, level, msg, event=None, **data):
-    """Helper to log structured events."""
-    extra = {}
-    if event:
-        extra['event_type'] = event
-    if data:
-        extra['event_data'] = data
-    log.log(level, msg, extra=extra)
 
 
 class ToolStatus(Enum):
@@ -123,24 +114,9 @@ class TimerTool(BaseTool):
         
         return ToolResult(
             status=ToolStatus.SUCCESS,
-            message=f"Timer set for {self._format_duration(duration)}",
+            message=f"Timer set for {format_duration(duration)}",
             data={"task_id": task_id, "duration": duration}
         )
-        
-    def _format_duration(self, seconds: int) -> str:
-        """Format duration for speech."""
-        if seconds < 60:
-            return f"{seconds} seconds"
-        elif seconds < 3600:
-            minutes = seconds // 60
-            return f"{minutes} minute{'s' if minutes != 1 else ''}"
-        else:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            parts = [f"{hours} hour{'s' if hours != 1 else ''}"]
-            if minutes:
-                parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-            return " and ".join(parts)
 
 
 class CallbackTool(BaseTool):
@@ -202,7 +178,7 @@ class HangupTool(BaseTool):
             try:
                 # Schedule hangup after a short delay to allow goodbye message to play
                 async def delayed_hangup():
-                    await asyncio.sleep(3)  # Wait for TTS to finish
+                    await asyncio.sleep(HANGUP_DELAY_SECONDS)  # Wait for TTS to finish
                     if self.assistant.current_call:
                         await self.assistant.sip_handler.hangup_call(self.assistant.current_call)
                         logger.info("Call ended via HANGUP tool")
@@ -314,7 +290,7 @@ class WeatherTool(BaseTool):
             # Build natural language response
             parts = []
 
-            if solar_radiation > 0:
+            if solar_radiation is not None and solar_radiation > 0:
                 sun = "sunny" if solar_radiation > 800 else "partly sunny" if solar_radiation > 400 else "cloudy"
             else:
                 sun = "dark"
@@ -332,7 +308,7 @@ class WeatherTool(BaseTool):
             
             if wind_mph is not None:
                 wind_desc = f"wind from the {wind_cardinal} at {wind_mph} miles per hour"
-                if wind_gust_mph >0:
+                if wind_gust_mph is not None and wind_gust_mph > 0:
                     wind_desc += f", gusting to {wind_gust_mph} miles per hour"
                 if wind_mph == 0:
                     wind_desc = f"Wind is currently calm"
@@ -340,18 +316,20 @@ class WeatherTool(BaseTool):
                     wind_desc += ", be advised it is quite windy"
                 parts.append(wind_desc)
             
-            if precip_rate and precip_rate > 0:
-                parts.append(f"it is currently raining, with a total of {round(precip_accum_local_day * 0.03937, 2)} inches today")
-            elif precip_accum_last_1hr and precip_accum_last_1hr > 0:
+            if precip_rate is not None and precip_rate > 0:
+                precip_today = precip_accum_local_day if precip_accum_local_day is not None else 0
+                parts.append(f"it is currently raining, with a total of {round(precip_today * 0.03937, 2)} inches today")
+            elif precip_accum_last_1hr is not None and precip_accum_last_1hr > 0:
                 parts.append(f"It is not currently raining, however it has rained {round(precip_accum_last_1hr * 0.03937, 2)} inches in the past hour")
 
-            if lightning_strike_count_last_1hr and lightning_strike_count_last_1hr > 0:
-                parts.append(f"Be advised there have been {lightning_strike_count_last_1hr} lightning strikes in the past hour {lightning_strike_last_distance_miles} miles away")
+            if lightning_strike_count_last_1hr is not None and lightning_strike_count_last_1hr > 0:
+                distance_str = f"{lightning_strike_last_distance_miles} miles away" if lightning_strike_last_distance_miles is not None else "nearby"
+                parts.append(f"Be advised there have been {lightning_strike_count_last_1hr} lightning strikes in the past hour {distance_str}")
             
             if uv is not None and uv >= 6:
                 parts.append(f"UV index is currently high at {round(uv)}")
 
-            if pressure_trend:
+            if pressure_trend and barometric_pressure is not None:
                 parts.append(f"barometric pressure is {pressure_trend} at {round(barometric_pressure, 2)} millibars")
 
            
@@ -578,7 +556,7 @@ class ToolManager:
                     
                     return ToolResult(
                         status=ToolStatus.SUCCESS,
-                        message=f"I'll call you back in {self._format_delay(delay)}"
+                        message=f"I'll call you back in {format_duration(delay)}"
                     )
                 # -------------------------------
 
@@ -754,24 +732,6 @@ class ToolManager:
         ]
         for task_id in to_remove:
             del self.scheduled_tasks[task_id]
-            
-    def _format_delay(self, seconds: int) -> str:
-        """Format delay for natural speech."""
-        if seconds < 60:
-            return f"{seconds} seconds"
-        elif seconds < 3600:
-            minutes = seconds // 60
-            remaining = seconds % 60
-            if remaining == 0:
-                return f"{minutes} minute{'s' if minutes != 1 else ''}"
-            return f"{minutes} minute{'s' if minutes != 1 else ''} and {remaining} seconds"
-        else:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            parts = [f"{hours} hour{'s' if hours != 1 else ''}"]
-            if minutes:
-                parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-            return " and ".join(parts)
 
 
 # Convenience function for creating custom tools

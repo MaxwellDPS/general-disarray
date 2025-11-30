@@ -13,10 +13,9 @@ scipy>=1.10.0
 webrtcvad>=2.0.10
 soundfile>=0.12.0
 
-# WebRTC for realtime streaming (optional but recommended)
-# Enables low-latency STT via Speaches /v1/realtime endpoint
-aiortc>=1.6.0
-av>=10.0.0
+# WebSocket for realtime streaming (optional but recommended)
+# Enables low-latency STT via Speaches /v1/realtime WebSocket endpoint
+websockets>=12.0
 
 # HTTP clients for API communication
 httpx>=0.25.0

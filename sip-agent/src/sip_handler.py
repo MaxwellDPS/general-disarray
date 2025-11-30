@@ -32,18 +32,9 @@ except ImportError:
 
 from config import Config
 from telemetry import create_span, Metrics
+from logging_utils import log_event, WAV_HEADER_SIZE
 
 logger = logging.getLogger(__name__)
-
-
-def log_event(log, level, msg, event=None, **data):
-    """Helper to log structured events."""
-    extra = {}
-    if event:
-        extra['event_type'] = event
-    if data:
-        extra['event_data'] = data
-    log.log(level, msg, extra=extra)
 
 
 # ============================================================================
@@ -187,7 +178,7 @@ class SIPCall(pj.Call if PJSUA_AVAILABLE else object):
                 try:
                     if os.path.exists(self.call_info.record_file):
                         os.unlink(self.call_info.record_file)
-                except:
+                except OSError:
                     pass
                 self.call_info.record_file = None
                 
@@ -319,7 +310,7 @@ class PlaylistPlayer:
                 file_path, _ = self.file_queue.get_nowait()
                 try:
                     os.unlink(file_path)
-                except:
+                except OSError:
                     pass
             except queue.Empty:
                 break
@@ -358,7 +349,7 @@ class PlaylistPlayer:
             logger.warning("No audio media for playback")
             try:
                 os.unlink(file_path)
-            except:
+            except OSError:
                 pass
             return
             
@@ -378,7 +369,7 @@ class PlaylistPlayer:
             logger.error(f"Playback error: {e}")
             try:
                 os.unlink(file_path)
-            except:
+            except OSError:
                 pass
                 
     def _cleanup_player(self, pj_call: SIPCall):
@@ -389,7 +380,7 @@ class PlaylistPlayer:
             try:
                 if pj_call.aud_med and pj_call.call_info and pj_call.call_info.is_active:
                     self._pj_player.stopTransmit(pj_call.aud_med)
-            except:
+            except Exception:
                 pass
             self._pj_player = None
             
@@ -398,7 +389,7 @@ class PlaylistPlayer:
         if self._current_file:
             try:
                 os.unlink(self._current_file)
-            except:
+            except OSError:
                 pass
             self._current_file = None
 
@@ -631,7 +622,7 @@ class SIPHandler:
             for i, codec in enumerate(self.config.audio_codecs):
                 try:
                     self.endpoint.codecSetPriority(codec, 255 - i)
-                except:
+                except Exception:
                     pass
                     
             # Account
@@ -668,7 +659,7 @@ class SIPHandler:
                         call.handler = None
                         prm = pj.CallOpParam()
                         call.hangup(prm)
-                    except:
+                    except Exception:
                         pass
                 del calls_to_cleanup
                 
@@ -682,7 +673,7 @@ class SIPHandler:
                 for _ in range(10):
                     try:
                         self.endpoint.libHandleEvents(100)
-                    except:
+                    except Exception:
                         break
                 
                 # Clear call references before destroying library
@@ -693,7 +684,7 @@ class SIPHandler:
                     try:
                         self.account.handler = None  # Break circular ref
                         self.account.shutdown()
-                    except:
+                    except Exception:
                         pass
                     self.account = None
                 
@@ -701,7 +692,7 @@ class SIPHandler:
                 for _ in range(5):
                     try:
                         self.endpoint.libHandleEvents(50)
-                    except:
+                    except Exception:
                         break
                 
                 # Force garbage collection to clean up any remaining PJSIP objects
@@ -715,7 +706,7 @@ class SIPHandler:
                 if self.endpoint:
                     try:
                         self.endpoint.libDestroy()
-                    except:
+                    except Exception:
                         pass
                     self.endpoint = None
                     
@@ -886,9 +877,6 @@ class SIPHandler:
                 return None
                 
             file_size = os.path.getsize(call_info.record_file)
-            
-            # WAV header is 44 bytes for standard PCM
-            WAV_HEADER_SIZE = 44
             
             # Initialize read position past the header on first read
             if call_info.record_file_pos == 0:

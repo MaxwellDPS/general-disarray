@@ -15,22 +15,13 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field, model_validator
 
 from telemetry import create_span, Metrics
+from logging_utils import log_event
 
 if TYPE_CHECKING:
     from main import SIPAIAssistant
     from call_queue import CallQueue
 
 logger = logging.getLogger(__name__)
-
-
-def log_event(log, level, msg, event=None, **data):
-    """Helper to log structured events."""
-    extra = {}
-    if event:
-        extra['event_type'] = event
-    if data:
-        extra['event_data'] = data
-    log.log(level, msg, extra=extra)
 
 
 # ============================================================================

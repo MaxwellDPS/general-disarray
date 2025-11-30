@@ -277,10 +277,16 @@ class Metrics:
         return cls._counters.get(name)
     
     @classmethod
-    def _get_or_create_histogram(cls, name: str, description: str, unit: str = "ms"):
+    def _get_or_create_histogram(cls, name: str, description: str, unit: str = "ms", buckets: list = None):
         if name not in cls._histograms:
             meter = get_meter()
             if meter:
+                # Use explicit bucket boundaries if provided
+                if buckets:
+                    from opentelemetry.sdk.metrics.view import View, ExplicitBucketHistogramAggregation
+                    # Note: Views must be configured at MeterProvider level, 
+                    # so we just create the histogram and rely on default aggregation
+                    pass
                 cls._histograms[name] = meter.create_histogram(
                     name=name,
                     description=description,
@@ -695,6 +701,103 @@ class Metrics:
         )
         if counter:
             counter.add(1)
+    
+    # ===================
+    # Realtime/WebSocket STT Metrics
+    # ===================
+    
+    @classmethod
+    def record_realtime_connection_attempt(cls):
+        counter = cls._get_or_create_counter(
+            "sip.realtime.connection_attempts",
+            "WebSocket connection attempts"
+        )
+        if counter:
+            counter.add(1)
+    
+    @classmethod
+    def record_realtime_connection_state(cls, state: str):
+        counter = cls._get_or_create_counter(
+            "sip.realtime.connection_state_changes",
+            "WebSocket connection state changes"
+        )
+        if counter:
+            counter.add(1, {"connection.state": state})
+    
+    @classmethod
+    def record_realtime_connection_error(cls, error_type: str):
+        counter = cls._get_or_create_counter(
+            "sip.realtime.connection_errors",
+            "WebSocket connection errors"
+        )
+        if counter:
+            counter.add(1, {"error.type": error_type})
+    
+    @classmethod
+    def record_realtime_reconnection(cls):
+        counter = cls._get_or_create_counter(
+            "sip.realtime.reconnections",
+            "Successful WebSocket reconnections"
+        )
+        if counter:
+            counter.add(1)
+    
+    @classmethod
+    def record_stt_mode(cls, mode: str):
+        counter = cls._get_or_create_counter(
+            "sip.stt.mode_initializations",
+            "STT mode initializations"
+        )
+        if counter:
+            counter.add(1, {"stt.mode": mode})
+    
+    # ===================
+    # Audio Buffer Metrics
+    # ===================
+    
+    @classmethod
+    def record_audio_buffer_overflow(cls):
+        counter = cls._get_or_create_counter(
+            "sip.audio.buffer_overflows",
+            "Audio buffer overflow events"
+        )
+        if counter:
+            counter.add(1)
+    
+    # ===================
+    # Tool Execution Metrics
+    # ===================
+    
+    @classmethod
+    def record_tool_success(cls, tool_name: str):
+        counter = cls._get_or_create_counter(
+            "sip.tool.success",
+            "Successful tool executions"
+        )
+        if counter:
+            counter.add(1, {"tool.name": tool_name})
+    
+    @classmethod
+    def record_tool_failure(cls, tool_name: str, error_type: str = "unknown"):
+        counter = cls._get_or_create_counter(
+            "sip.tool.failures",
+            "Failed tool executions"
+        )
+        if counter:
+            counter.add(1, {"tool.name": tool_name, "error.type": error_type})
+    
+    # ===================
+    # API Retry Metrics
+    # ===================
+    
+    @classmethod
+    def record_api_retry(cls, api_name: str, attempt: int):
+        counter = cls._get_or_create_counter(
+            "sip.api.retries",
+            "API retry attempts"
+        )
+        if counter:
+            counter.add(1, {"api.name": api_name, "retry.attempt": str(attempt)})
 
 
 # ===================
@@ -730,14 +833,24 @@ class TraceContextFilter(logging.Filter):
         return True
 
 
-def get_otel_log_handler():
+class NullHandler(logging.Handler):
+    """A null handler that does nothing - used as fallback."""
+    def emit(self, record):
+        pass
+
+
+def get_otel_log_handler() -> logging.Handler:
     """
-    Attach the OTEL LoggingHandler to the root logger.
+    Get the OTEL LoggingHandler or a NullHandler fallback.
     
+    Always returns a logging.Handler for consistent return type.
     Call this AFTER logging.basicConfig() to ensure the handler isn't removed.
+    
+    Returns:
+        logging.Handler: Either an OTEL LoggingHandler or NullHandler
     """
     if not OTEL_ENABLED or not _initialized:
-        return False
+        return NullHandler()
     
     try:
         from opentelemetry._logs import get_logger_provider
@@ -746,15 +859,9 @@ def get_otel_log_handler():
         logger_provider = get_logger_provider()
         if logger_provider is None:
             logger.warning("No OTEL logger provider available")
-            return False
+            return NullHandler()
         
-        # # Check if handler already attached
-        # root_logger = logging.getLogger()
-        # for handler in root_logger.handlers:
-        #     if isinstance(handler, LoggingHandler):
-        #         return True  # Already attached
-        
-        # Attach handler
+        # Create and return the handler
         otel_handler = LoggingHandler(
             level=logging.DEBUG,
             logger_provider=logger_provider
@@ -762,5 +869,5 @@ def get_otel_log_handler():
         return otel_handler
         
     except Exception as e:
-        logger.warning(f"Failed to attach OTEL log handler: {e}")
-        return False
+        logger.warning(f"Failed to create OTEL log handler: {e}")
+        return NullHandler()

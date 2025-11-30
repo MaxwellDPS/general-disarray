@@ -10,6 +10,7 @@ This container is lightweight - just orchestration.
 """
 
 import json
+import os
 import time
 import random
 import signal
@@ -22,6 +23,7 @@ from tool_manager import ToolManager
 from config import Config, get_config
 from llm_engine import create_llm_engine
 from audio_pipeline import LowLatencyAudioPipeline
+from logging_utils import log_event
 
 # Initialize OpenTelemetry early (before other modules)
 from telemetry import init_telemetry, is_enabled as otel_enabled, TraceContextFilter, Metrics, get_otel_log_handler
@@ -55,29 +57,6 @@ class JSONFormatter(logging.Formatter):
             log_data['exc'] = self.formatException(record.exc_info)
             
         return json.dumps(log_data)
-
-
-class EventLogAdapter(logging.LoggerAdapter):
-    """Logger adapter that adds event fields."""
-    
-    def process(self, msg, kwargs):
-        extra = kwargs.get('extra', {})
-        if 'event' in extra:
-            extra['event_type'] = extra.pop('event')
-        if 'data' in extra:
-            extra['event_data'] = extra.pop('data')
-        kwargs['extra'] = extra
-        return msg, kwargs
-
-
-def log_event(log, level, msg, event=None, **data):
-    """Helper to log structured events."""
-    extra = {}
-    if event:
-        extra['event_type'] = event
-    if data:
-        extra['event_data'] = data
-    log.log(level, msg, extra=extra)
 
 
 # Configure JSON logging
@@ -251,18 +230,29 @@ class SIPAIAssistant:
         logger.info("Stopped.")
         
     async def _precache_phrases(self):
-        """Pre-generate audio for common phrases."""
+        """Pre-generate audio for common phrases concurrently."""
         logger.info(f"Pre-caching {len(self._phrases_to_cache)} phrases...")
         
-        cached = 0
-        for phrase in self._phrases_to_cache:
-            try:
-                audio = await self.audio_pipeline.synthesize(phrase)
-                if audio:
-                    cached += 1
-            except Exception as e:
-                logger.warning(f"Failed to cache '{phrase}': {e}")
-                
+        # Use semaphore to limit concurrent TTS requests
+        MAX_CONCURRENT_TTS = 5
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_TTS)
+        
+        async def cache_phrase(phrase: str) -> bool:
+            async with semaphore:
+                try:
+                    audio = await self.audio_pipeline.synthesize(phrase)
+                    return audio is not None
+                except Exception as e:
+                    logger.warning(f"Failed to cache '{phrase}': {e}")
+                    return False
+        
+        # Run all precaching concurrently with limited concurrency
+        results = await asyncio.gather(
+            *[cache_phrase(phrase) for phrase in self._phrases_to_cache],
+            return_exceptions=True
+        )
+        
+        cached = sum(1 for r in results if r is True)
         logger.info(f"Pre-cached {cached}/{len(self._phrases_to_cache)} phrases")
         
     def get_random_acknowledgment(self) -> str:

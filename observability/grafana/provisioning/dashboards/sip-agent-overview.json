@@ -579,8 +579,66 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "group": "A", "mode": "normal" } },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 78 },
+      "id": 112,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (tool_name) (rate(sip_tool_success_total[5m]))", "legendFormat": "{{tool_name}} success", "refId": "A" },
+        { "expr": "sum by (tool_name) (rate(sip_tool_failures_total[5m]))", "legendFormat": "{{tool_name}} fail", "refId": "B" }
+      ],
+      "title": "Tool Success/Failure Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "realtime": { "color": "green", "text": "Realtime" }, "batch": { "color": "blue", "text": "Batch" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 78 },
+      "id": 113,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum by (stt_mode) (sip_stt_mode_initializations_total)", "legendFormat": "{{stt_mode}}", "refId": "A" }],
+      "title": "STT Mode",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 78 },
+      "id": 114,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(rate(sip_realtime_connection_state_changes_total{connection_state=\"connected\"}[5m]))", "legendFormat": "connected", "refId": "A" },
+        { "expr": "sum(rate(sip_realtime_connection_state_changes_total{connection_state=\"disconnected\"}[5m]))", "legendFormat": "disconnected", "refId": "B" },
+        { "expr": "sum(rate(sip_realtime_reconnections_total[5m]))", "legendFormat": "reconnections", "refId": "C" }
+      ],
+      "title": "Realtime STT Connection",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 78 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 84 },
       "id": 106,
       "panels": [],
       "title": "💬 Conversation Quality",
@@ -595,7 +653,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 79 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 85 },
       "id": 60,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -614,7 +672,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 79 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 85 },
       "id": 61,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -626,7 +684,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 85 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 91 },
       "id": 107,
       "panels": [],
       "title": "📋 Queue & Callbacks",

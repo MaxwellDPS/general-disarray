@@ -44,7 +44,7 @@ class Config:
     # Speech detection
     speech_pad_ms: int = 200
     min_speech_duration_ms: int = field(default_factory=lambda: int(os.getenv("MIN_SPEECH_DURATION_MS", "200")))
-    max_speech_duration_s: float = field(default_factory=lambda: float(os.getenv("MIN_SPEECH_DURATION_MS", "10.0")))
+    max_speech_duration_s: float = field(default_factory=lambda: float(os.getenv("MAX_SPEECH_DURATION_S", "10.0")))
     silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("SILENCE_TIMEOUT_MS", "750")))
     
     # ===================
@@ -52,20 +52,21 @@ class Config:
     # ===================
     speaches_api_url: str = field(default_factory=lambda: os.getenv("SPEACHES_API_URL", "http://localhost:8001"))
     
-    # STT Mode: "realtime" (WebRTC streaming) or "batch" (file upload)
-    # Realtime mode provides lower latency via WebRTC streaming
-    stt_mode: str = field(default_factory=lambda: os.getenv("STT_MODE", "realtime"))
+    # STT Mode: "realtime" (WebSocket streaming) or "batch" (file upload)
+    # NOTE: Realtime mode requires Speaches v0.8.0+ with stable realtime API.
+    # Default to batch mode for stability. Set STT_MODE=realtime to enable streaming.
+    stt_mode: str = field(default_factory=lambda: os.getenv("STT_MODE", "batch"))
     
     # STT (Whisper) settings
     whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-small.en"))
     whisper_language: str = field(default_factory=lambda: os.getenv("WHISPER_LANGUAGE", "en"))
     whisper_response_format: str = "json"
     
-    # WebRTC Realtime settings
-    webrtc_ice_servers: list = field(default_factory=lambda: [
-        {"urls": os.getenv("WEBRTC_STUN_SERVER", "stun:stun.l.google.com:19302")}
-    ])
-    webrtc_audio_codec: str = field(default_factory=lambda: os.getenv("WEBRTC_AUDIO_CODEC", "opus"))
+    # API Retry Configuration
+    api_retry_attempts: int = field(default_factory=lambda: int(os.getenv("API_RETRY_ATTEMPTS", "3")))
+    api_retry_base_delay_s: float = field(default_factory=lambda: float(os.getenv("API_RETRY_BASE_DELAY_S", "0.5")))
+    api_retry_max_delay_s: float = field(default_factory=lambda: float(os.getenv("API_RETRY_MAX_DELAY_S", "5.0")))
+    api_timeout_s: float = field(default_factory=lambda: float(os.getenv("API_TIMEOUT_S", "30.0")))
     
     # TTS settings (Piper/Kokoro via Speaches)
     # Default to Kokoro which is well-supported by Speaches
@@ -83,7 +84,7 @@ class Config:
     
     @property
     def use_realtime_stt(self) -> bool:
-        """Whether to use WebRTC realtime streaming for STT."""
+        """Whether to use WebSocket realtime streaming for STT."""
         return self.stt_mode.lower() == "realtime"
     
     # ===================

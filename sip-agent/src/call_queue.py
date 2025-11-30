@@ -20,18 +20,9 @@ if TYPE_CHECKING:
     from api import OutboundCallRequest, OutboundCallHandler
 
 from telemetry import Metrics
+from logging_utils import log_event
 
 logger = logging.getLogger(__name__)
-
-
-def log_event(log, level, msg, event=None, **data):
-    """Helper to log structured events."""
-    extra = {}
-    if event:
-        extra['event_type'] = event
-    if data:
-        extra['event_data'] = data
-    log.log(level, msg, extra=extra)
 
 
 class QueuedCallStatus(str, Enum):
@@ -71,6 +62,11 @@ class CallQueue:
     - Queue persistence (survives restarts)
     - Atomic operations (safe for concurrent access)
     - Call status tracking
+    
+    Configuration via environment variables:
+    - REDIS_URL: Full Redis URL (default: redis://localhost:6379/0)
+    - REDIS_PASSWORD: Redis password for authentication (optional)
+    - REDIS_SSL: Set to "true" to enable SSL/TLS (optional)
     """
     
     QUEUE_KEY = "sip:call_queue"
@@ -82,7 +78,11 @@ class CallQueue:
         redis_url: str = None,
         max_concurrent: int = 1
     ):
+        # Build Redis URL with authentication if provided
         self.redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        self.redis_password = os.environ.get("REDIS_PASSWORD")
+        self.redis_ssl = os.environ.get("REDIS_SSL", "").lower() == "true"
+        
         self.max_concurrent = max_concurrent
         self.redis: Optional[redis.Redis] = None
         self._worker_task: Optional[asyncio.Task] = None
@@ -91,10 +91,26 @@ class CallQueue:
         self._semaphore: Optional[asyncio.Semaphore] = None
         
     async def connect(self):
-        """Connect to Redis."""
-        self.redis = redis.from_url(self.redis_url, decode_responses=True)
+        """Connect to Redis with optional authentication."""
+        # Build connection kwargs
+        connect_kwargs = {
+            "decode_responses": True,
+        }
+        
+        if self.redis_password:
+            connect_kwargs["password"] = self.redis_password
+            logger.info("Redis authentication enabled")
+            
+        if self.redis_ssl:
+            connect_kwargs["ssl"] = True
+            logger.info("Redis SSL/TLS enabled")
+        
+        self.redis = redis.from_url(self.redis_url, **connect_kwargs)
         await self.redis.ping()
-        logger.info(f"Connected to Redis at {self.redis_url}")
+        
+        # Log connection without exposing password
+        safe_url = self.redis_url.split("@")[-1] if "@" in self.redis_url else self.redis_url
+        logger.info(f"Connected to Redis at {safe_url}")
         
     async def disconnect(self):
         """Disconnect from Redis."""

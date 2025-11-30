@@ -34,6 +34,8 @@ except ImportError:
 
 from config import Config
 from telemetry import create_span, Metrics
+from logging_utils import log_event
+from retry_utils import retry_async, RetryError
 
 
 logger = logging.getLogger(__name__)
@@ -119,7 +121,7 @@ class FastVoiceActivityDetector:
                         if self.vad.is_speech(frame, self.sample_rate):
                             return True
                 return False
-            except:
+            except Exception:
                 pass
                 
         return energy > self.noise_floor * 2
@@ -237,7 +239,7 @@ class WhisperAPIClient:
             
     async def transcribe(self, audio_data: bytes) -> str:
         """
-        Transcribe audio using OpenAI-compatible API.
+        Transcribe audio using OpenAI-compatible API with retry logic.
         """
         if not self.available or not self.client:
             logger.warning("Whisper API not available")
@@ -254,7 +256,8 @@ class WhisperAPIClient:
             "audio.duration_s": audio_duration_s
         }) as span:
             start_time = time.time()
-            try:
+            
+            async def do_transcribe():
                 wav_buffer = io.BytesIO()
                 with wave.open(wav_buffer, 'wb') as wav:
                     wav.setnchannels(1)
@@ -277,33 +280,41 @@ class WhisperAPIClient:
                     files=files,
                     data=data
                 )
+                response.raise_for_status()
+                return response.json()
+            
+            try:
+                result = await retry_async(
+                    do_transcribe,
+                    api_name="stt",
+                    config=self.config,
+                    retryable_exceptions=(httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException),
+                )
                 
                 latency_ms = (time.time() - start_time) * 1000
+                text = result.get('text', '').strip()
                 
-                if response.status_code == 200:
-                    result = response.json()
-                    text = result.get('text', '').strip()
-                    
-                    # Record metrics
-                    span.set_attribute("stt.text_length", len(text))
-                    span.set_attribute("stt.latency_ms", latency_ms)
-                    Metrics.record_stt_latency(latency_ms, self.model)
-                    Metrics.record_stt_audio_duration(audio_duration_s)
-                    
-                    # Record confidence if available (Whisper API may not always provide this)
-                    if 'confidence' in result:
-                        confidence = result.get('confidence', 1.0)
-                        Metrics.record_stt_confidence(confidence, self.model)
-                        span.set_attribute("stt.confidence", confidence)
-                    
-                    return text
-                else:
-                    logger.error(f"Whisper API error: {response.status_code} - {response.text}")
-                    span.set_attribute("error", True)
-                    span.set_attribute("http.status_code", response.status_code)
-                    Metrics.record_stt_error(self.model, f"http_{response.status_code}")
-                    return ""
-                    
+                # Record metrics
+                span.set_attribute("stt.text_length", len(text))
+                span.set_attribute("stt.latency_ms", latency_ms)
+                Metrics.record_stt_latency(latency_ms, self.model)
+                Metrics.record_stt_audio_duration(audio_duration_s)
+                
+                # Record confidence if available (Whisper API may not always provide this)
+                if 'confidence' in result:
+                    confidence = result.get('confidence', 1.0)
+                    Metrics.record_stt_confidence(confidence, self.model)
+                    span.set_attribute("stt.confidence", confidence)
+                
+                return text
+                
+            except RetryError as e:
+                latency_ms = (time.time() - start_time) * 1000
+                span.set_attribute("stt.latency_ms", latency_ms)
+                span.set_attribute("error", str(e))
+                Metrics.record_stt_error(self.model, "retry_exhausted")
+                logger.error(f"STT transcription failed after retries: {e}")
+                return ""
             except asyncio.TimeoutError:
                 logger.error("STT request timeout")
                 Metrics.record_stt_error(self.model, "timeout")
@@ -764,7 +775,7 @@ class LowLatencyAudioPipeline:
         """
         # In realtime mode, push audio for streaming transcription
         if self._stt_manager and self._stt_manager.is_realtime:
-            self._stt_manager.push_audio(audio_chunk)
+            await self._stt_manager.push_audio(audio_chunk)
             
         is_speech, end_of_utterance = self.vad.process_audio(audio_chunk)
         
@@ -796,7 +807,13 @@ class LowLatencyAudioPipeline:
         
         # Use the appropriate client
         if self._stt_manager and self._stt_manager.available:
-            result = await self._stt_manager.transcribe(audio_data)
+            if self._stt_manager.is_realtime:
+                # In realtime mode, audio was already streamed via push_audio()
+                # The server VAD handles speech detection and triggers transcription
+                # We wait briefly for any pending result
+                result = await self._stt_manager.transcribe(b"")  # Empty - audio already sent
+            else:
+                result = await self._stt_manager.transcribe(audio_data)
         elif self._stt_batch_client and self._stt_batch_client.available:
             result = await self._stt_batch_client.transcribe(audio_data)
         else:
