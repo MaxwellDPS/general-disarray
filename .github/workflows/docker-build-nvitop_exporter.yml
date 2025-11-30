@@ -13,6 +13,8 @@ on:
       - main
     paths:
       - 'nvitop/**'
+  release:
+    types: [published, created, edited, prereleased]
 env:
   # Docker Hub
   DOCKERHUB_REPO: chaoscorp/nvitop-exporter
