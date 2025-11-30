@@ -123,7 +123,7 @@ class LLMEngine:
             tool_result = result.get("result")
             
             # For informational tools, append the result message
-            if tool_name in ("WEATHER", "STATUS") and tool_result:
+            if tool_name in ("WEATHER", "STATUS", "JOKE", "DATETIME", "CALC") and tool_result:
                 if hasattr(tool_result, 'message') and tool_result.message:
                     # Add the result to the response
                     if response_text:
