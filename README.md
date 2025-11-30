@@ -11,8 +11,8 @@ A voice-powered AI assistant that answers phone calls, understands natural langu
 [![Runs on DGX Spark](https://img.shields.io/badge/Runs%20on-DGX%20Spark-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 [![Docs](https://img.shields.io/badge/Docs-readme.io-blue)](https://sip-agent.readme.io)
 
-[![Build Status](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build.yml/badge.svg)](https://github.com/your-org/sip-agent/actions/workflows/docker-build.yml)
-[![Build Status](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build-nvitop_exporter.yml/badge.svg)](https://github.com/your-org/sip-agent/actions/workflows/docker-build.yml)
+[![Build Status](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build.yml/badge.svg)](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build.ym)
+[![Build Status](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build-nvitop_exporter.yml/badge.svg)](https://github.com/MaxwellDPS/general-disarray/actions/workflows/docker-build-nvitop_exporter.yml)
 
 📖 **[Read the Documentation](https://sip-agent.readme.io)**
 
