@@ -43,10 +43,9 @@ services:
       vllm serve
       ${LLM_MODEL:-meta-llama/Llama-3.1-70B-Instruct}
       --port 8000
-      --gpu-memory-utilization 0.50
+      --gpu-memory-utilization 0.60
       --max-model-len 8192
       --trust-remote-code
-      --enforce-eager
       --enable-prefix-caching
       --enable-chunked-prefill
       --max-num-batched-tokens 2048
@@ -75,12 +74,10 @@ services:
   # OpenAI-compatible API for both transcription and speech synthesis
   # ============================================================================
   speaches:
-    image: ghcr.io/speaches-ai/speaches:0.9.0-rc.2-cuda-12.6.3
+    image: ghcr.io/cha0s-corp/speaches-cuda:latest
     build:
       context: ./speaches/
       dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: nvcr.io/nvidia/pytorch:25.11-py3-igpu
     container_name: sip-ai-speaches
     runtime: nvidia
     ipc: host
@@ -91,7 +88,7 @@ services:
       # Options: default, int8, int8_float16, int8_float32, int8_bfloat16, 
       #          int16, float16, bfloat16, float32
       - WHISPER__COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-default}
-      - WHISPER__DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER__INFERENCE_DEVICE=${WHISPER_DEVICE:-cuda}
       - WHISPER__INFERENCE_CONFIG__BEAM_SIZE=${WHISPER_BEAM_SIZE:-1}
       - WHISPER__INFERENCE_CONFIG__LANGUAGE=${WHISPER_LANGUAGE:-en}
       - WHISPER__INFERENCE_CONFIG__VAD_FILTER=true
